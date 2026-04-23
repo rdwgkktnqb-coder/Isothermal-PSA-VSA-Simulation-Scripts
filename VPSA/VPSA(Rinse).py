@@ -13,7 +13,7 @@ from numba import njit
 warnings.filterwarnings('ignore')
 
 # =============================================================================
-# 1. SETUP & PATHS
+# 1. SETUP & PATH
 # =============================================================================
 run_type = os.environ.get("RUN_TYPE", "CSS") 
 current_cycle = os.environ.get("PSA_CYCLE", "1")
