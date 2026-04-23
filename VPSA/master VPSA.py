@@ -3,7 +3,7 @@ import os
 import subprocess
 import numpy as np
 
-# 1. SETUP PATHS
+# 1. SETUP PATH
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
 ads_script = "VPSA(ads,New).py" 
