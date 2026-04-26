@@ -36,7 +36,7 @@ cycle_folder = os.path.join(base_dir, f"{run_type}_cycle_{current_cycle}")
 
 # 3. Create the directories
 os.makedirs(cycle_folder, exist_ok=True)
-(f"\n--- Starting Desorption/Blowdown for [{run_type}] Cycle {current_cycle} ---")
+print(f"\n--- Starting Desorption/Blowdown for [{run_type}] Cycle {current_cycle} ---")
 print(f"--- Results will be saved to: {cycle_folder} ---")
 
 # =============================================================================
