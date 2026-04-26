@@ -32,7 +32,7 @@ def wipe_states():
 # --- 1.2 DEFINE INITIAL MASTER PARAMETERS ---
 Phigh = 15 * 101325  
 Plow = 1 * 101325   
-PFratio = 0.121 # Increased purge for realistic CSS stability
+PFratio = 0.09 # Increased purge for realistic CSS stability
 L=12 #m
 d =3 #m
 master_params = {
@@ -44,7 +44,7 @@ master_params = {
     "P_low": Plow,
     "d": d,
     "Nsets": 3,
-    "ratio_layer1": 0.6,
+    "ratio_layer1": 0.8,
     "purge_fraction": PFratio,
     "N": 100,
     "dp": 0.002,
@@ -52,13 +52,13 @@ master_params = {
     "P_atm_Pa": 101325.0,
     "eps_1": 0.35,
     "eps_2": 0.35,
-    "rho_s_1": 2000,
-    "rho_s_2": 2500,
+    "rho_s_1": 850,
+    "rho_s_2": 1160,
     
     # Ratios used for auto-scaling phase times
     "Adsorption_Ratio": 0.50,
-    "Blowdown_Ratio": 0.10,
-    "Purge_Ratio": 0.35, # Adjusted to match the PFratio bump
+    "Blowdown_Ratio": 0.15,
+    "Purge_Ratio": 0.25, # Adjusted to match the PFratio bump
     'Repress_Ratio': 0.05, # New ratio for repressurization time
     
    # Time Parameters: 
