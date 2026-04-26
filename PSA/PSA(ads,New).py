@@ -77,7 +77,7 @@ def get_Z_PR(P, T, y):
 
 mass_out_total = 100000e3/(330*24*3600)  
 target_mass_out_H2 = mass_out_total/Nsets
-expected_recovery = 0.76
+expected_recovery = 0.73
 
 required_molar_in_H2 = (target_mass_out_H2 / MW[0]) / expected_recovery
 required_molar_in_total = required_molar_in_H2 / y_feed[0]
@@ -198,9 +198,6 @@ mass_flow_purge_H2 = np.zeros(n_t)
 n_dot_in = y_feed[0] * C_in_total * u_feed * A * np.ones_like(t)
 moles_in_array = [np.trapz(n_dot_in[:i+1], t[:i+1]) for i in range(n_t)]
 n_H2_inventory = np.sum(sol.y[:N, 0] * dz * A * eps) + np.sum(sol.y[5*N:6*N, 0] * dz * A * (1 - eps) * rho_s)
-
-# Repressurization Debt
-n_H2_rep_penalty = ( (A * L * np.mean(eps)) * C_in_total * ((P_high - P_low)/P_high) ) + np.sum(np.mean(sol.y[5*N:6*N, 0]) * dz * A * (1-eps) * rho_s)
 
 # Repressurization Debt
 n_H2_rep_penalty = ( (A * L * np.mean(eps)) * C_in_total * ((P_high - P_low)/P_high) ) + np.sum(np.mean(sol.y[5*N:6*N, 0]) * dz * A * (1-eps) * rho_s)
