@@ -13,7 +13,7 @@ from numba import njit
 warnings.filterwarnings('ignore')
 
 # =============================================================================
-# 1. SETUP & PATH
+# 1. SETUP & PATHS
 # =============================================================================
 run_type = os.environ.get("RUN_TYPE", "CSS") 
 current_cycle = os.environ.get("PSA_CYCLE", "1")
@@ -68,7 +68,7 @@ y_feed = np.array([0.0, 1.0, 0.0])
 C_in_total = P_mid / (R * T)
 
 # Update: Read superficial velocity directly from config
-u_feed = float(config.get("u_feed_rinse", 0.05)) # Default to 0.05 m/s if not found
+u_feed = float(config.get("u_feed_rinse", 0.00)) # Default to 0.05 m/s if not found
 
 # Back-calculate molar flow for the PDE solver and reporting
 feed_molar_flow = u_feed * A * C_in_total 
@@ -140,9 +140,16 @@ def calc_rhs(t, y, N, P_low, P_mid, u_feed, eps, rho_s, dz, MW, mu, y_feed, k_ld
         
         sum_dqdt = dqdt_0 + dqdt_1 + dqdt_2
         
-        # Velocity Update 
+        # Velocity Update
         du = -dz * ((1 - eps) * rho_s * sum_dqdt / (current_P / (R * T)))
         next_u = current_u + du
+        # Floor the velocity to prevent numerical collapse at the adsorption front.
+        # Real physics: when adsorption demand exceeds feed supply, pressure builds
+        # back-up to maintain flow; this code doesn't model that pressure feedback,
+        # so without a floor the front cell's gas piles up to 1000+ atm.
+        u_floor = 0.05 * u_feed
+        if next_u < u_floor:
+            next_u = u_floor
         
         # Dynamic Upwinding
         if next_u >= 0.0:
@@ -185,7 +192,7 @@ def pde_layered(t, y):
 data = np.load(ads_state_file)
 y0 = np.concatenate([data['C_end'].flatten(), data['q_end'].flatten()])
 
-sol = solve_ivp(pde_layered, [0, t_end], y0, method='BDF', t_eval=t_eval, rtol=1e-3, atol=1e-5)
+sol = solve_ivp(pde_layered, [0, t_end], y0, method='BDF', t_eval=t_eval, rtol=1e-3, atol=1e-4, first_step=0.01)
 pbar.close()
 
 # =============================================================================
@@ -195,12 +202,28 @@ pbar.close()
 tau_ramp = 0.5
 co2_moles_rinse = feed_molar_flow * (t_end + tau_ramp * (np.exp(-t_end / tau_ramp) - 1.0))
 
+# Mass-balance the rinse step so we know how much CO2 actually slipped out the
+# raffinate end (vs how much stayed in the bed). This is the conserved quantity
+# we need for an honest cycle recovery; the bed-inventory delta on its own has
+# numerical drift that swamps the fresh feed when the rinse is large.
+C_rinse_end = sol.y[:3*N, -1].reshape(3, N)
+q_rinse_end = sol.y[3*N:, -1].reshape(3, N)
+rinse_end_co2_inv = (np.sum(C_rinse_end[1, :]) * (A * dz * eps)
+                     + np.sum(q_rinse_end[1, :]) * (A * dz * (1 - eps) * rho_s))
+
+ads_data = np.load(ads_state_file)
+ads_end_co2_inv = float(ads_data['ads_end_inventory'][1]) if 'ads_end_inventory' in ads_data.files else 0.0
+
+# CO2 in − ΔCO2_bed = CO2 out the raffinate end
+co2_moles_exhaust_rinse = max(co2_moles_rinse - (rinse_end_co2_inv - ads_end_co2_inv), 0.0)
+
 rinse_state_file = os.path.join(script_dir, 'rinse_end_state.npz')
 np.savez(rinse_state_file,
          L=L, T=T, R=R, P_end=P_mid, d=d,
-         C_end=sol.y[:3*N, -1],  
+         C_end=sol.y[:3*N, -1],
          q_end=sol.y[3*N:, -1],
-         co2_moles_rinse=co2_moles_rinse) 
+         co2_moles_rinse=co2_moles_rinse,
+         co2_moles_exhaust_rinse=float(co2_moles_exhaust_rinse))
 
 print(f"✅ Rinse State Saved. Ready for Blowdown!")
 # =============================================================================
@@ -256,5 +279,4 @@ for j in range(3):
     # Close the plot to free up memory
     plt.close(fig_species)
 
-print(f"✅ Rinse State Saved. Ready for Blowdown!")
 print("---------------------\n")

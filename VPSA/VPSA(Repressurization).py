@@ -149,9 +149,9 @@ def pde_repressurization(t, y):
     
     return np.concatenate([dCdt.flatten(), dqdt.flatten()])
 
-sol_rep = solve_ivp(pde_repressurization, [t_eval_rep[0], t_eval_rep[-1]], y0_rep, method='BDF', 
+sol_rep = solve_ivp(pde_repressurization, [t_eval_rep[0], t_eval_rep[-1]], y0_rep, method='BDF',
                    t_eval=t_eval_rep,
-                   rtol=1e-3, atol=1e-5, first_step=1e-6) 
+                   rtol=1e-3, atol=1e-4, first_step=0.1) 
 
 pbar_rep.close() 
 

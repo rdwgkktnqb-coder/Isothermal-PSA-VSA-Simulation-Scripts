@@ -59,7 +59,7 @@ A = pi*(d/2)**2
 labels = ['N2', 'CO2', 'O2']
 colors = ['gray', 'blue', 'red']
 MW = np.array([0.028014, 0.044009, 0.031998])
-y_feed = np.array([0.8689, 0.1006, 0.0304]) 
+y_feed = np.array([0.804585, 0.1006, 0.0304]) 
 y_feed /= np.sum(y_feed)
 
 feed_molar_flow = float(config.get("feed_molar_flow", 450.0)) 
@@ -97,21 +97,7 @@ a_ergun_arr = (150 * (1 - eps)**2) / (4 * (dp/2)**2 * eps**3) * np.ones(N)
 b_ergun_arr = (1.75 * (1 - eps)) / (2 * (dp/2) * eps**3) * np.ones(N)
 
 # =============================================================================
-# 3. SPARSE JACOBIAN DEFINITION (Lower-Triangular Block)
-# =============================================================================
-total_vars = 6 * N
-sparsity_matrix = np.zeros((total_vars, total_vars))
-
-for eq_type in range(6): 
-    for var_type in range(6): 
-        for j in range(N):
-            for k in range(min(j + 2, N)): 
-                sparsity_matrix[eq_type * N + j, var_type * N + k] = 1
-
-jac_sparsity = sp.csc_matrix(sparsity_matrix)
-
-# =============================================================================
-# 4. PDE SOLVER LOGIC (Fully Unrolled for Maximum Speed)
+# 3. PDE SOLVER LOGIC (Fully Unrolled for Maximum Speed)
 # =============================================================================
 @njit(cache=True)
 def calc_rhs(t, y, N, P_low, P_high, P_atm_Pa, u_feed, eps, rho_s, dz, MW, Rp, mu, y_feed, k_ldf, q_s, b_toth, R, T, a_ergun_arr, b_ergun_arr):
@@ -163,9 +149,15 @@ def calc_rhs(t, y, N, P_low, P_high, P_atm_Pa, u_feed, eps, rho_s, dz, MW, Rp, m
         
         sum_dqdt = dqdt_0 + dqdt_1 + dqdt_2
         
-        # 7. Velocity Update 
+        # 7. Velocity Update
         du = -dz * ((1 - eps) * rho_s * sum_dqdt / (current_P / (R * T)))
         next_u = current_u + du
+        # Floor the velocity to prevent numerical collapse at the adsorption front.
+        # Without this clamp, when local adsorption demand exceeds feed supply,
+        # next_u drops to zero/negative and gas piles up unphysically in 1-2 cells.
+        u_floor = 0.05 * u_feed
+        if next_u < u_floor:
+            next_u = u_floor
         
         # 8. Gas Phase Balances (DYNAMIC UPWINDING)
         # Check flow direction to prevent pushing negative concentrations forward
@@ -238,7 +230,7 @@ else:
 
     y0 = np.concatenate([C_init.flatten(), q_init.flatten()])
 
-sol = solve_ivp(pde_layered, [0, t_end], y0, method='BDF', t_eval=t_ads_eval, rtol=1e-3, atol=1e-5)
+sol = solve_ivp(pde_layered, [0, t_end], y0, method='BDF', t_eval=t_ads_eval, rtol=1e-3, atol=1e-4, first_step=0.01)
 print("\n✅ Integration complete! Generating plots and saving data...")
 pbar.close()
 
@@ -343,10 +335,12 @@ q_init_reshaped = y0[3*N:].reshape((3, N))
 C_final_reshaped = sol.y[:3*N, eval_idx].reshape((3, N))
 q_final_reshaped = sol.y[3*N:, eval_idx].reshape((3, N))
 
+tau_ramp = 0.5
+ramp_integral = t_end + tau_ramp * (np.exp(-t_end / tau_ramp) - 1.0)
 for i in range(3):
     initial_inventory[i] = np.sum(C_init_reshaped[i, :] * dz * A * eps) + np.sum(q_init_reshaped[i, :] * dz * A * (1 - eps) * rho_s)
     final_inventory[i] = np.sum(C_final_reshaped[i, :] * dz * A * eps) + np.sum(q_final_reshaped[i, :] * dz * A * (1 - eps) * rho_s)
-    moles_in_total[i] = y_feed[i] * C_in_total * u_feed * A * t_end
+    moles_in_total[i] = y_feed[i] * C_in_total * u_feed * A * ramp_integral
     
 moles_exhaust_gross = np.maximum(moles_in_total - (final_inventory - initial_inventory), 0.0)
 
@@ -372,9 +366,9 @@ if run_type == "SCOUT":
     config["t_tot"] = t_tot # <--- ADD THIS LINE
     
     config["tf_des"] = config.get("Purge_Ratio", 0.0) * t_tot
-    config["t_cod_end"] = config.get("CoD_Ratio", 0.1) * t_tot      
     config["t_blowdown_end"] = config.get("Blowdown_Ratio", 0.1) * t_tot
     config["t_rep"] = config.get("Repress_Ratio", 0.05) * t_tot
+    config["t_rinse"] = config.get("Rinse_Ratio", 0.0) * t_tot
     
     with open(config_path, "w") as f: json.dump(config, f, indent=4)
 
@@ -404,11 +398,13 @@ elif run_type in ["CSS", "FINAL"]:
     ads_state_file = os.path.join(script_dir, 'adsorption_end_state.npz')
     np.savez(ads_state_file,
              L=L, T=T, R=R, P_end=P_high, d=d,
-             C_end=sol.y[:3*N, eval_idx],  
-             q_end=sol.y[3*N:, eval_idx],  
+             C_end=sol.y[:3*N, eval_idx],
+             q_end=sol.y[3*N:, eval_idx],
              final_mass_flow_purge=mass_flow_purge_exhaust[eval_idx],
              t_tot=t_tot,
-             co2_moles_fed=co2_moles_fed_exact) # <--- Pass exact moles
+             co2_moles_fed=co2_moles_fed_exact,
+             co2_moles_exhaust_ads=float(moles_exhaust_gross[1]),
+             ads_end_inventory=final_inventory) # <--- Pass exact moles
     
     print(f"✅ Adsorption State Saved.")
 

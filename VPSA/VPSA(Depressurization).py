@@ -50,6 +50,7 @@ d = float(state_data['d'])
 A = pi * (d / 2)**2
 N = int(config["N"])
 co2_moles_rinse = float(state_data['co2_moles_rinse'])
+co2_moles_exhaust_rinse = float(state_data['co2_moles_exhaust_rinse']) if 'co2_moles_exhaust_rinse' in state_data.files else 0.0
 
 eps = float(config.get("eps", 0.35))
 rho_s = float(config.get("rho_s", 2000))
@@ -57,7 +58,8 @@ P_start = float(state_data['P_end'])
 P_low = float(config["P_low"])
 ads_state_file = os.path.join(script_dir, 'adsorption_end_state.npz')
 ads_data = np.load(ads_state_file)
-co2_moles_fed = float(ads_data['co2_moles_fed']) 
+co2_moles_fed = float(ads_data['co2_moles_fed'])
+co2_moles_exhaust_ads = float(ads_data['co2_moles_exhaust_ads']) if 'co2_moles_exhaust_ads' in ads_data.files else 0.0
 
 C_initial = state_data['C_end']
 q_initial = state_data['q_end']
@@ -74,12 +76,12 @@ mass_transfer_coeff = ((1 - eps) / eps) * rho_s
 # Toth Constants
 k_ldf = np.array([[0.0021], [0.0143], [0.002]]).repeat(N, axis=1) 
 
-k_qs_1 = np.array([[1.89],[2.82],[0.0]]).repeat(N, axis=1)
-k_qs_2 = np.array([[-2.25e-4],[-3.50e-4],[0.0]]).repeat(N, axis=1)
-q_s = k_qs_1 + k_qs_2 * T        
+k_qs_1 = np.array([[1.89],[2.82],[1e-8]]).repeat(N, axis=1)
+k_qs_2 = np.array([[-2.25e-4],[-3.50e-4],[1e-8]]).repeat(N, axis=1)
+q_s = k_qs_1 + k_qs_2 * T
 
-b_0 = np.array([[1.16e-9], [2.83e-9], [1e-10]]).repeat(N, axis=1)  
-B_val = np.array([[1944.61], [2598.2], [0.0]]).repeat(N, axis=1)                   
+b_0 = np.array([[1.16e-9], [2.83e-9], [1e-8]]).repeat(N, axis=1)
+B_val = np.array([[1944.61], [2598.2], [1e-8]]).repeat(N, axis=1)
 b_toth = b_0 * np.exp(B_val / T)
 
 # Track exact moles in the bed BEFORE blowdown starts
@@ -97,6 +99,7 @@ initial_co2_moles = initial_inventory[1]
 def calc_rhs_blowdown(t, y, N, P_low, P_start, tau_bd, eps, rho_s, dz, k_ldf, q_s, b_toth, R, T):
     res = np.empty(6 * N)
     
+    # 1. Pressure & Expansion Kinetics
     P_t = P_low + (P_start - P_low) * np.exp(-t / tau_bd)
     dPdt = -(P_start - P_low) / tau_bd * np.exp(-t / tau_bd)
     dCtot_dt_expansion = dPdt / (R * T)
@@ -108,6 +111,7 @@ def calc_rhs_blowdown(t, y, N, P_low, P_start, tau_bd, eps, rho_s, dz, k_ldf, q_
     dqdt_1 = np.zeros(N)
     dqdt_2 = np.zeros(N)
     
+    # 2. Mass Transfer Rates (LDF)
     for j in range(N):
         raw_C_0 = y[0 * N + j]
         raw_C_1 = y[1 * N + j]
@@ -118,9 +122,9 @@ def calc_rhs_blowdown(t, y, N, P_low, P_start, tau_bd, eps, rho_s, dz, k_ldf, q_
         y_frac_1 = max(raw_C_1, 0.0) / C_tot_raw
         y_frac_2 = max(raw_C_2, 0.0) / C_tot_raw
         
-        P_0_kPa = (y_frac_0 * P_t) / 1000.0
-        P_1_kPa = (y_frac_1 * P_t) / 1000.0
-        P_2_kPa = (y_frac_2 * P_t) / 1000.0
+        P_0_kPa = (y_frac_0 * P_t)
+        P_1_kPa = (y_frac_1 * P_t)
+        P_2_kPa = (y_frac_2 * P_t)
         
         denom_0 = 1.0 + b_toth[0, j] * P_0_kPa
         denom_1 = 1.0 + b_toth[1, j] * P_1_kPa
@@ -144,34 +148,59 @@ def calc_rhs_blowdown(t, y, N, P_low, P_start, tau_bd, eps, rho_s, dz, k_ldf, q_
         
         sum_dqdt[j] = dq0 + dq1 + dq2
 
-    # --- VELOCITY FIX (Anchored at 0 at the closed ceiling, flowing DOWN) ---
+    # 3. Velocity Integration (Anchored at 0 at the closed ceiling, flowing DOWN)
     C_tot_theo = P_t / (R * T)
     v_local = np.zeros(N)
     
     dv_dz_top = - (dCtot_dt_expansion + mass_transfer_coef * sum_dqdt[N-1]) / C_tot_theo
-    v_local[N-1] = -dv_dz_top * dz # Negative velocity (flow leaving ceiling)
+    # v(z=L)=0 at the closed wall; cell N-1 is centered half a step below the wall
+    v_local[N-1] = -dv_dz_top * (dz / 2.0)
     
     for j in range(N-2, -1, -1):
         dv_dz_j = - (dCtot_dt_expansion + mass_transfer_coef * sum_dqdt[j]) / C_tot_theo
         v_local[j] = v_local[j+1] - dv_dz_j * dz
         
+    # 4. IMMUNE DYNAMIC UPWINDING
+    F_face_0 = np.zeros(N + 1)
+    F_face_1 = np.zeros(N + 1)
+    F_face_2 = np.zeros(N + 1)
+
+    # Calculate fluxes at every cell face
     for j in range(N):
-        raw_C_0 = y[0 * N + j]
-        raw_C_1 = y[1 * N + j]
-        raw_C_2 = y[2 * N + j]
+        v_face = v_local[j]
         
-        F_bottom_0 = v_local[j] * raw_C_0
-        F_bottom_1 = v_local[j] * raw_C_1
-        F_bottom_2 = v_local[j] * raw_C_2
-        
-        if j == N - 1:
-            F_top_0 = 0.0
-            F_top_1 = 0.0
-            F_top_2 = 0.0
+        if v_face >= 0.0:
+            # Flowing UPWARDS (only happens during solver probing)
+            if j == 0:
+                C_up_0, C_up_1, C_up_2 = 0.0, 0.0, 0.0 # Vacuum backflow assumption
+            else:
+                C_up_0 = y[0 * N + j - 1]
+                C_up_1 = y[1 * N + j - 1]
+                C_up_2 = y[2 * N + j - 1]
         else:
-            F_top_0 = v_local[j+1] * y[0 * N + j + 1]
-            F_top_1 = v_local[j+1] * y[1 * N + j + 1]
-            F_top_2 = v_local[j+1] * y[2 * N + j + 1]
+            # Flowing DOWNWARDS (Standard Blowdown behavior)
+            C_up_0 = y[0 * N + j]
+            C_up_1 = y[1 * N + j]
+            C_up_2 = y[2 * N + j]
+
+        F_face_0[j] = v_face * C_up_0
+        F_face_1[j] = v_face * C_up_1
+        F_face_2[j] = v_face * C_up_2
+
+    # Ceiling face (z=L) is always closed
+    F_face_0[N] = 0.0
+    F_face_1[N] = 0.0
+    F_face_2[N] = 0.0
+
+    # 5. Flux Balance
+    for j in range(N):
+        F_bottom_0 = F_face_0[j]
+        F_bottom_1 = F_face_1[j]
+        F_bottom_2 = F_face_2[j]
+        
+        F_top_0 = F_face_0[j+1]
+        F_top_1 = F_face_1[j+1]
+        F_top_2 = F_face_2[j+1]
             
         res[0 * N + j] = -((F_top_0 - F_bottom_0) / dz) - mass_transfer_coef * dqdt_0[j]
         res[1 * N + j] = -((F_top_1 - F_bottom_1) / dz) - mass_transfer_coef * dqdt_1[j]
@@ -189,8 +218,8 @@ def pde_blowdown(t, y):
         last_t_bd[0] = t
     return calc_rhs_blowdown(t, y, N, P_low, P_start, tau_bd, eps, rho_s, dz, k_ldf, q_s, b_toth, R, T)
 
-sol_bd = solve_ivp(pde_blowdown, [t_eval_bd[0], t_eval_bd[-1]], y0_bd, method='BDF', 
-                   t_eval=t_eval_bd, rtol=1e-3, atol=1e-6)
+sol_bd = solve_ivp(pde_blowdown, [t_eval_bd[0], t_eval_bd[-1]], y0_bd, method='BDF',
+                   t_eval=t_eval_bd, rtol=1e-3, atol=1e-4, first_step=0.01)
 pbar_bd.close() 
 
 #=============================================================================
@@ -213,11 +242,12 @@ for i, t in enumerate(t_actual_bd):
     C_safe = np.maximum(C_at_t, 1e-12)
     C_tot_actual = np.sum(C_safe, axis=0)
     
-    sum_dqdt = np.sum(k_ldf * (((b_toth * ((C_safe / C_tot_actual) * P_t) / 1000.0 * q_s) / (1.0 + b_toth * ((C_safe / C_tot_actual) * P_t) / 1000.0)) - q_history_bd[i]), axis=0)
+    sum_dqdt = np.sum(k_ldf * (((b_toth * ((C_safe / C_tot_actual) * P_t) * q_s) / (1.0 + b_toth * ((C_safe / C_tot_actual) * P_t))) - q_history_bd[i]), axis=0)
     dv_dz_viz = - (dCtot_dt_expansion + mass_transfer_coeff * sum_dqdt) / (P_t / (R * T))
     
     v_local_viz = np.zeros(N)
-    v_local_viz[N-1] = -dv_dz_viz[N-1] * dz
+    # v(z=L)=0 at the closed wall; cell N-1 is centered half a step below the wall
+    v_local_viz[N-1] = -dv_dz_viz[N-1] * (dz / 2.0)
     for j in range(N-2, -1, -1):
         v_local_viz[j] = v_local_viz[j+1] - dv_dz_viz[j] * dz
     
@@ -246,8 +276,12 @@ gross_step_recovery = (co2_moles_collected / initial_co2_moles) * 100 if initial
 
 
 # C. True Cycle Recovery (Net new CO2 captured vs Flue Gas input)
-# We subtract the rinse moles from the total collected to avoid counting recycled product.
-net_co2_produced = co2_moles_collected - co2_moles_rinse
+# Use the exhaust-side mass balance, which is conserved cycle-to-cycle:
+#     fresh CO2 in (ads) = CO2 out (ads exhaust) + CO2 out (rinse exhaust) + product
+# The earlier formula (collected − rinse_in) relied on the bed-inventory snapshot
+# at the start of blowdown, which has small numerical drift that gets amplified
+# because rinse_in ≫ fresh_in — that's how cycle_recovery was breaking 100%.
+net_co2_produced = max(co2_moles_fed - co2_moles_exhaust_ads - co2_moles_exhaust_rinse, 0.0)
 cycle_recovery = (net_co2_produced / co2_moles_fed) * 100 if co2_moles_fed > 0 else 0.0
 
 
@@ -266,7 +300,9 @@ with open(summary_path, 'w', encoding='utf-8') as f:
     f.write(f"Cycle Recovery:       {cycle_recovery:>10.2f} % (True Capture Efficiency)\n")
     f.write("-" * 55 + "\n")
     f.write(f"Fresh CO2 Fed:        {co2_moles_fed:>10.2e} mol\n")
-    f.write(f"Pure CO2 Rinsed:      {co2_moles_rinse:>10.2e} mol\n")
+    f.write(f"CO2 Slipped (Ads):    {co2_moles_exhaust_ads:>10.2e} mol\n")
+    f.write(f"CO2 Slipped (Rinse):  {co2_moles_exhaust_rinse:>10.2e} mol\n")
+    f.write(f"Pure CO2 Rinsed In:   {co2_moles_rinse:>10.2e} mol\n")
     f.write(f"Total CO2 Vacuumed:   {co2_moles_collected:>10.2e} mol\n")
     f.write(f"NET CO2 PRODUCED:     {net_co2_produced:>10.2e} mol\n")
     f.write("="*55 + "\n\n")
