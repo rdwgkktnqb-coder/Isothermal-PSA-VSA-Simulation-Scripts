@@ -5,7 +5,7 @@ Two Python script sets that solve coupled, stiff, hyperbolic-parabolic PDE syste
 | Set | Application | PDE system size | Pressure swing |
 |-----|------------|-----------------|----------------|
 | **PSA** | H₂ purification from refinery off-gas | 10 × N states (5 species × {gas, solid}) | 15 bar → 1 bar |
-| **VPSA** | CO₂ capture from flue gas | 6 × N states (3 species × {gas, solid}) | 1 bar → 0.1 bar |
+| **VPSA** | CO₂ capture from flue gas | 6 × N states (3 species × {gas, solid}) | 1 bar → 0.03 bar |
 
 Both use the same numerical pipeline: **finite-volume spatial discretization → method of lines → BDF time integration with sparse Jacobian → Numba-compiled RHS evaluation**. Cycle-level convergence is enforced by an outer Picard loop on the solid-phase loading.
 
