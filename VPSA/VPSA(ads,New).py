@@ -352,18 +352,27 @@ for i in range(3):
     print(f"{labels[i]:<4}: {exhaust_mix_pct[i]:>6.2f}% | Slipped Moles: {moles_exhaust_gross[i]:.3e}")
 
 if run_type == "SCOUT":
-    C_CO2_exit = C_history[:, 1, -1]
-    purity_over_time = np.zeros(n_t)
-    for i in range(1, n_t):
-        C_total_exit = np.sum(C_history[i, :, -1])
-        purity_over_time[i] = (C_CO2_exit[i] / C_total_exit) * 100 if C_total_exit > 1e-9 else 0.0
-        
-    valid = np.where(purity_over_time >= 0.1)[0] 
-    breakthrough_time = t[valid[-1]] if len(valid) > 0 else t_end
+    # CO2 breakthrough: first time exit C/C0 crosses the threshold.
+    # Use C/C0 against feed concentration so the criterion lines up with the
+    # ads_breakthrough_curve.png plot.
+    co2_breakthrough_threshold = 0.01  # 1% of feed CO2 concentration
+    co2_exit_ratio = np.maximum(C_history[:, 1, -1] / C_in[1], 0.0)
+
+    valid = np.where(co2_exit_ratio >= co2_breakthrough_threshold)[0]
+    if len(valid) == 0 or valid[0] == 0:
+        breakthrough_time = t_end
+        print(f"⚠️ WARNING: CO2 breakthrough (C/C0 >= {co2_breakthrough_threshold}) "
+              f"not observed inside SCOUT window of {t_end:.0f}s. "
+              f"Increase t_ads_end in master_config.json.")
+    else:
+        breakthrough_time = t[valid[0]]
+        print(f"-> CO2 breakthrough detected at t = {breakthrough_time:.1f}s "
+              f"(C/C0 >= {co2_breakthrough_threshold}).")
+
     config["t_op_ads"] = float(breakthrough_time * t_ads_safety_ratio)
     
     t_tot = config["t_op_ads"] / config.get("Adsorption_Ratio", 0.5)
-    config["t_tot"] = t_tot # <--- ADD THIS LINE
+    config["t_tot"] = t_tot 
     
     config["tf_des"] = config.get("Purge_Ratio", 0.0) * t_tot
     config["t_blowdown_end"] = config.get("Blowdown_Ratio", 0.1) * t_tot
