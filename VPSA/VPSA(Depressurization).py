@@ -271,8 +271,11 @@ total_moles_collected = np.sum(moles_vacuumed_exact)
 # A. Purity
 co2_purity = (co2_moles_collected / total_moles_collected) * 100 if total_moles_collected > 0 else 0.0
 
-# B. Bed/Vacuum Efficiency (Gross yield from the bed's current inventory)
-gross_step_recovery = (co2_moles_collected / initial_co2_moles) * 100 if initial_co2_moles > 0 else 0.0
+# B. Bed Sweep Efficiency (fraction of CO2 in the bed at start of blowdown
+# that is actually vacuumed out — a working-capacity / vacuum-sweep metric,
+# not a true recovery: the denominator includes pure CO2 added by the rinse
+# step, so this is typically below cycle_recovery and that is expected.)
+bed_sweep_efficiency = (co2_moles_collected / initial_co2_moles) * 100 if initial_co2_moles > 0 else 0.0
 
 
 # C. True Cycle Recovery (Net new CO2 captured vs Flue Gas input)
@@ -296,8 +299,8 @@ with open(summary_path, 'w', encoding='utf-8') as f:
     f.write(f"Cycle: {current_cycle}\n")
     f.write(f"CO2 Purity:           {co2_purity:>10.2f} %\n")
     f.write("-" * 55 + "\n")
-    f.write(f"Gross Step Recovery:  {gross_step_recovery:>10.2f} % (Material/Vacuum Efficiency)\n")
-    f.write(f"Cycle Recovery:       {cycle_recovery:>10.2f} % (True Capture Efficiency)\n")
+    f.write(f"Bed Sweep Efficiency: {bed_sweep_efficiency:>10.2f} % (CO2 vacuumed / CO2 in bed at start of blowdown)\n")
+    f.write(f"Cycle Recovery:       {cycle_recovery:>10.2f} % (Net fresh CO2 captured / fresh CO2 fed)\n")
     f.write("-" * 55 + "\n")
     f.write(f"Fresh CO2 Fed:        {co2_moles_fed:>10.2e} mol\n")
     f.write(f"CO2 Slipped (Ads):    {co2_moles_exhaust_ads:>10.2e} mol\n")
@@ -309,8 +312,8 @@ with open(summary_path, 'w', encoding='utf-8') as f:
 
 print(f"\n--- PERFORMANCE AUDIT RESULTS ---")
 print(f"Purity:           {co2_purity:.2f}%")
-print(f"Bed Efficiency:   {gross_step_recovery:.2f}% (Gross)")
-print(f"Capture Ratio:    {cycle_recovery:.2f}% (Cycle)")
+print(f"Bed Sweep Eff.:   {bed_sweep_efficiency:.2f}% (CO2 vacuumed / CO2 in bed at start of BD)")
+print(f"Cycle Recovery:   {cycle_recovery:.2f}% (Net fresh CO2 captured / fresh CO2 fed)")
 
 
 # =============================================================================
