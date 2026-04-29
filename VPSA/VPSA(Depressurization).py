@@ -73,7 +73,7 @@ dz = L / N
 z_nodes = np.linspace(dz/2, L - dz/2, N)
 mass_transfer_coeff = ((1 - eps) / eps) * rho_s
 
-# Toth Constants
+#Constats
 k_ldf = np.array([[0.0021], [0.0143], [0.002]]).repeat(N, axis=1) 
 
 k_qs_1 = np.array([[1.89],[2.82],[1e-8]]).repeat(N, axis=1)
@@ -83,12 +83,9 @@ q_s = k_qs_1 + k_qs_2 * T
 b_0 = np.array([[1.16e-9], [2.83e-9], [1e-8]]).repeat(N, axis=1)
 B_val = np.array([[1944.61], [2598.2], [1e-8]]).repeat(N, axis=1)
 b_toth = b_0 * np.exp(B_val / T)
-
-# Track exact moles in the bed BEFORE blowdown starts
+#Initialize Inv
 initial_gas_moles = np.sum(C_initial[:3*N].reshape(3, N) * (A * dz * eps), axis=1)
 initial_solid_moles = np.sum(q_initial[:3*N].reshape(3, N) * (A * dz * (1 - eps) * rho_s), axis=1)
-
-# This is the 'initial_inventory' Pylance was looking for
 initial_inventory = initial_gas_moles + initial_solid_moles
 initial_co2_moles = initial_inventory[1]
 
@@ -160,7 +157,7 @@ def calc_rhs_blowdown(t, y, N, P_low, P_start, tau_bd, eps, rho_s, dz, k_ldf, q_
         dv_dz_j = - (dCtot_dt_expansion + mass_transfer_coef * sum_dqdt[j]) / C_tot_theo
         v_local[j] = v_local[j+1] - dv_dz_j * dz
         
-    # 4. IMMUNE DYNAMIC UPWINDING
+    # 4. DYNAMIC UPWINDING
     F_face_0 = np.zeros(N + 1)
     F_face_1 = np.zeros(N + 1)
     F_face_2 = np.zeros(N + 1)
@@ -246,7 +243,6 @@ for i, t in enumerate(t_actual_bd):
     dv_dz_viz = - (dCtot_dt_expansion + mass_transfer_coeff * sum_dqdt) / (P_t / (R * T))
     
     v_local_viz = np.zeros(N)
-    # v(z=L)=0 at the closed wall; cell N-1 is centered half a step below the wall
     v_local_viz[N-1] = -dv_dz_viz[N-1] * (dz / 2.0)
     for j in range(N-2, -1, -1):
         v_local_viz[j] = v_local_viz[j+1] - dv_dz_viz[j] * dz
@@ -272,18 +268,10 @@ total_moles_collected = np.sum(moles_vacuumed_exact)
 co2_purity = (co2_moles_collected / total_moles_collected) * 100 if total_moles_collected > 0 else 0.0
 
 # B. Bed Sweep Efficiency (fraction of CO2 in the bed at start of blowdown
-# that is actually vacuumed out — a working-capacity / vacuum-sweep metric,
-# not a true recovery: the denominator includes pure CO2 added by the rinse
-# step, so this is typically below cycle_recovery and that is expected.)
 bed_sweep_efficiency = (co2_moles_collected / initial_co2_moles) * 100 if initial_co2_moles > 0 else 0.0
 
 
 # C. True Cycle Recovery (Net new CO2 captured vs Flue Gas input)
-# Use the exhaust-side mass balance, which is conserved cycle-to-cycle:
-#     fresh CO2 in (ads) = CO2 out (ads exhaust) + CO2 out (rinse exhaust) + product
-# The earlier formula (collected − rinse_in) relied on the bed-inventory snapshot
-# at the start of blowdown, which has small numerical drift that gets amplified
-# because rinse_in ≫ fresh_in — that's how cycle_recovery was breaking 100%.
 net_co2_produced = max(co2_moles_fed - co2_moles_exhaust_ads - co2_moles_exhaust_rinse, 0.0)
 cycle_recovery = (net_co2_produced / co2_moles_fed) * 100 if co2_moles_fed > 0 else 0.0
 
@@ -307,7 +295,14 @@ with open(summary_path, 'w', encoding='utf-8') as f:
     f.write(f"CO2 Slipped (Rinse):  {co2_moles_exhaust_rinse:>10.2e} mol\n")
     f.write(f"Pure CO2 Rinsed In:   {co2_moles_rinse:>10.2e} mol\n")
     f.write(f"Total CO2 Vacuumed:   {co2_moles_collected:>10.2e} mol\n")
-    f.write(f"NET CO2 PRODUCED:     {net_co2_produced:>10.2e} mol\n")
+    f.write(f"NET CO2 PRODUCED:     {net_co2_produced:>10.2e} mol\n")    
+    f.write("-" * 55 + "\n")
+    f.write(f"Fresh CO2 Fed(kg):        {co2_moles_fed*MW[1]:>10.2e} kg\n")
+    f.write(f"CO2 Slipped (Ads)(kg):    {co2_moles_exhaust_ads*MW[1]:>10.2e} kg\n")
+    f.write(f"CO2 Slipped (Rinse)(kg):  {co2_moles_exhaust_rinse*MW[1]:>10.2e} kg\n")
+    f.write(f"Pure CO2 Rinsed In(kg):   {co2_moles_rinse*MW[1]:>10.2e} kg\n")
+    f.write(f"Total CO2 Vacuumed(kg):   {co2_moles_collected*MW[1]:>10.2e} kg\n")
+    f.write(f"NET CO2 PRODUCED(kg):     {net_co2_produced*MW[1]:>10.2e} kg\n")
     f.write("="*55 + "\n\n")
 
 print(f"\n--- PERFORMANCE AUDIT RESULTS ---")
@@ -371,7 +366,10 @@ fig2d.savefig(profiles_path)
 des_state_file = os.path.join(script_dir, 'desorption_end_state.npz')
 np.savez(des_state_file, 
          C_end=sol_bd.y[:3*N, -1], 
-         q_end=sol_bd.y[3*N:, -1])
+         q_end=sol_bd.y[3*N:, -1],
+         )
+config["y_co2_feed_rinse"] = co2_purity/100
+with open(config_path, "w") as f: json.dump(config, f, indent=4)
 
 print(f"✅ Blowdown state saved to {des_state_file}")
 plt.close('all')
