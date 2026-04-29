@@ -33,8 +33,6 @@ with open(config_path, "r") as f:
 L = config["L"]; T = config["T"]; R = config["R"]
 P_high = config["P_high"]; P_low = config["P_low"]
 d = config["d"]; Nsets = config["Nsets"]
-
-# FIXED: Defaults to 0.0 if the purge step was removed from the master config
 purge_fraction = float(config.get("purge_fraction", 0.0))
 t_ads_safety_ratio = float(config.get("t_ads_safety_ratio", 0.90))
 
@@ -104,10 +102,9 @@ def calc_rhs(t, y, N, P_low, P_high, P_atm_Pa, u_feed, eps, rho_s, dz, MW, Rp, m
     res = np.empty(6 * N) 
     current_P = P_high
     current_u = u_feed
-    # At the top of calc_rhs, replace your static flux_in with a ramped version:
     feed_ramp = 1.0 - np.exp(-t / 0.5) # Reaches ~95% after 1.5 seconds
 
-    flux_in_0 = (current_u / eps) * (y_feed[0] * feed_ramp + (1 - feed_ramp)) * (current_P / (R * T)) # Starts as pure N2
+    flux_in_0 = (current_u / eps) * (y_feed[0] * feed_ramp + (1 - feed_ramp)) * (current_P / (R * T)) 
     flux_in_1 = (current_u / eps) * (y_feed[1] * feed_ramp) * (current_P / (R * T))
     flux_in_2 = (current_u / eps) * (y_feed[2] * feed_ramp) * (current_P / (R * T))
     
@@ -118,8 +115,6 @@ def calc_rhs(t, y, N, P_low, P_high, P_atm_Pa, u_feed, eps, rho_s, dz, MW, Rp, m
         raw_C_1 = y[1 * N + j]
         raw_C_2 = y[2 * N + j]
         
-        # --- THE FIX: Break the Concentration-Pressure Feedback Loop ---
-        # Normalize to mole fractions to prevent runaway partial pressures
         C_tot_raw = max(raw_C_0 + raw_C_1 + raw_C_2, 1e-10)
         y_0 = max(raw_C_0, 0.0) / C_tot_raw
         y_1 = max(raw_C_1, 0.0) / C_tot_raw
@@ -153,8 +148,6 @@ def calc_rhs(t, y, N, P_low, P_high, P_atm_Pa, u_feed, eps, rho_s, dz, MW, Rp, m
         du = -dz * ((1 - eps) * rho_s * sum_dqdt / (current_P / (R * T)))
         next_u = current_u + du
         # Floor the velocity to prevent numerical collapse at the adsorption front.
-        # Without this clamp, when local adsorption demand exceeds feed supply,
-        # next_u drops to zero/negative and gas piles up unphysically in 1-2 cells.
         u_floor = 0.05 * u_feed
         if next_u < u_floor:
             next_u = u_floor
@@ -353,8 +346,6 @@ for i in range(3):
 
 if run_type == "SCOUT":
     # CO2 breakthrough: first time exit C/C0 crosses the threshold.
-    # Use C/C0 against feed concentration so the criterion lines up with the
-    # ads_breakthrough_curve.png plot.
     co2_breakthrough_threshold = 0.01  # 1% of feed CO2 concentration
     co2_exit_ratio = np.maximum(C_history[:, 1, -1] / C_in[1], 0.0)
 
@@ -389,13 +380,12 @@ elif run_type in ["CSS", "FINAL"]:
         f.write("="*55 + "\n")
         f.write(f"Cycle: {current_cycle}\n")
         f.write("-" * 55 + "\n")
-        f.write(f"{'Species':<10} | {'Slipped Moles':<15} | {'Mix %':<10}\n")
+        f.write(f"{'Species':<10} | {'Slipped Moles':<15} |{'Slipped weight(kg)':<15} | {'Mix %':<10}\n")
         f.write("-" * 55 + "\n")
         for i in range(3):
-            f.write(f"{labels[i]:<10} | {moles_exhaust_gross[i]:<15.3e} | {exhaust_mix_pct[i]:<10.2f}\n")
+            f.write(f"{labels[i]:<10} | {moles_exhaust_gross[i]:<15.3e} || {moles_exhaust_gross[i]*MW[i]:<15.3e} {exhaust_mix_pct[i]:<10.2f}\n")
         f.write("="*55 + "\n\n")
     
-    # Ensure t_tot exists: try config value, otherwise compute from t_op_ads and Adsorption_Ratio, fallback to t_end
     t_tot = config.get("t_tot", None)
     if t_tot is None:
         t_op_ads_val = config.get("t_op_ads", t_end)
@@ -413,7 +403,7 @@ elif run_type in ["CSS", "FINAL"]:
              t_tot=t_tot,
              co2_moles_fed=co2_moles_fed_exact,
              co2_moles_exhaust_ads=float(moles_exhaust_gross[1]),
-             ads_end_inventory=final_inventory) # <--- Pass exact moles
+             ads_end_inventory=final_inventory) 
     
     print(f"✅ Adsorption State Saved.")
 
