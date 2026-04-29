@@ -40,7 +40,11 @@ with open(config_path, "r") as f:
 L = config["L"]; T = config["T"]; R = config["R"]
 P_mid = config["P_mid"]; P_low = config["P_low"]
 d = config["d"]; Nsets = config["Nsets"]
-
+# THE RINSE FEED: 100% CO2
+y_co2_feed = config.get("y_co2_feed_rinse", 1)
+y_feed = np.array([1-y_co2_feed, y_co2_feed, 0.0])
+print(y_feed)
+y_feed /= np.sum(y_feed)
 N = int(config["N"])
 dp = float(config.get("dp", 0.002))
 mu = float(config.get("mu", 1.135086e-05))
@@ -62,8 +66,7 @@ labels = ['N2', 'CO2', 'O2']
 colors = ['gray', 'blue', 'red']
 MW = np.array([0.028014, 0.044009, 0.031998])
 
-# THE RINSE FEED: 100% CO2
-y_feed = np.array([0.0, 1.0, 0.0]) 
+
 
 C_in_total = P_mid / (R * T)
 
@@ -144,9 +147,6 @@ def calc_rhs(t, y, N, P_low, P_mid, u_feed, eps, rho_s, dz, MW, mu, y_feed, k_ld
         du = -dz * ((1 - eps) * rho_s * sum_dqdt / (current_P / (R * T)))
         next_u = current_u + du
         # Floor the velocity to prevent numerical collapse at the adsorption front.
-        # Real physics: when adsorption demand exceeds feed supply, pressure builds
-        # back-up to maintain flow; this code doesn't model that pressure feedback,
-        # so without a floor the front cell's gas piles up to 1000+ atm.
         u_floor = 0.05 * u_feed
         if next_u < u_floor:
             next_u = u_floor
@@ -197,15 +197,9 @@ pbar.close()
 
 # =============================================================================
 # 4. REPORTING & STATE SAVING
-# =============================================================================
-# Calculate EXACT analytical integral of the feed ramp to prevent trapezoid error
 tau_ramp = 0.5
-co2_moles_rinse = feed_molar_flow * (t_end + tau_ramp * (np.exp(-t_end / tau_ramp) - 1.0))
-
-# Mass-balance the rinse step so we know how much CO2 actually slipped out the
-# raffinate end (vs how much stayed in the bed). This is the conserved quantity
-# we need for an honest cycle recovery; the bed-inventory delta on its own has
-# numerical drift that swamps the fresh feed when the rinse is large.
+co2_moles_rinse = y_co2_feed * feed_molar_flow * (t_end + tau_ramp * (np.exp(-t_end / tau_ramp) - 1.0))
+#Differeciate Ads Exchaust loss and Rinse Loss
 C_rinse_end = sol.y[:3*N, -1].reshape(3, N)
 q_rinse_end = sol.y[3*N:, -1].reshape(3, N)
 rinse_end_co2_inv = (np.sum(C_rinse_end[1, :]) * (A * dz * eps)
@@ -213,8 +207,6 @@ rinse_end_co2_inv = (np.sum(C_rinse_end[1, :]) * (A * dz * eps)
 
 ads_data = np.load(ads_state_file)
 ads_end_co2_inv = float(ads_data['ads_end_inventory'][1]) if 'ads_end_inventory' in ads_data.files else 0.0
-
-# CO2 in − ΔCO2_bed = CO2 out the raffinate end
 co2_moles_exhaust_rinse = max(co2_moles_rinse - (rinse_end_co2_inv - ads_end_co2_inv), 0.0)
 
 rinse_state_file = os.path.join(script_dir, 'rinse_end_state.npz')
@@ -248,10 +240,7 @@ species_cmaps = [plt.cm.Greys, plt.cm.Blues, plt.cm.Reds] # for N2, CO2, O2 resp
 
 # 5. Loop through each species to create separate plots
 for j in range(3):
-    # Setup the plot for this specific species
     fig_species, ax_species = plt.subplots(figsize=(8, 6), tight_layout=True)
-    
-    # Create a shade-based color gradient for the time snapshots for this species plot
     species_shade_cmap = species_cmaps[j](np.linspace(0.4, 0.9, len(time_indices))) 
     
     # Loop through the time snapshots for this species plot
@@ -266,9 +255,8 @@ for j in range(3):
     ax_species.set_xlabel('Column Length z (m)', fontsize=12)
     ax_species.set_ylabel('Gas Molar Fraction (%)', fontsize=12)
     ax_species.grid(True, linestyle='--', alpha=0.7)
-    # Legend for time snapshots within this species plot
     ax_species.legend(loc='best', title="Time Snapshots", fontsize=10) 
-    ax_species.set_ylim(-5, 105) # Consistent y-axis for easy comparison
+    ax_species.set_ylim(-5, 105) 
     ax_species.set_xlim(0, L)
 
     # 7. Save the figure with dynamic filename
@@ -276,7 +264,6 @@ for j in range(3):
     fig_species.savefig(species_profile_path, dpi=150)
     print(f"✅ Gas phase {labels[j]} profile saved to {species_profile_path}")
 
-    # Close the plot to free up memory
     plt.close(fig_species)
 
 print("---------------------\n")
