@@ -1,0 +1,6 @@
+Requires Python ≥ 3.9
+numpy
+scipy
+matplotlib
+numba
+tqdm
