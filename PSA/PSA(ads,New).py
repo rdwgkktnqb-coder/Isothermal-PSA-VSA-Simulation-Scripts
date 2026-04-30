@@ -125,7 +125,9 @@ b_ergun_arr = (1.75 * (1 - eps)) / (2 * (dp/2) * eps**3)
 # =============================================================================
 @njit(cache=True)
 def calc_rhs(t, y, N, P_low, P_high, P_atm_Pa, u_feed, eps, rho_s, dz, MW, Rp, mu, y_feed, k_ldf, qm, B, n_param, R, T, a_ergun_arr, b_ergun_arr):
-    res = np.zeros(10 * N); current_P = P_high; current_u = u_feed
+    res = np.zeros(10 * N); current_P = P_high
+    ergun_ramp = 1.0 - np.exp(-t / 5.0)
+    current_u = u_feed * ergun_ramp
     flux_in = (current_u / eps[0]) * (y_feed * (current_P / (R * T)))
     C_safe_arr = np.zeros(5)
     for j in range(N):
@@ -148,8 +150,7 @@ def calc_rhs(t, y, N, P_low, P_high, P_atm_Pa, u_feed, eps, rho_s, dz, MW, Rp, m
             res[i * N + j] = -((flux_out_i - flux_in[i]) / dz) - ((1 - eps[j]) / eps[j]) * rho_s[j] * res[5 * N + i * N + j]
             flux_in[i] = flux_out_i 
         if j < N - 1:
-            ergun_ramp = (1.0 - np.exp(-t / 5.0))
-            dPdz = - (a_ergun_arr[j] * mu * current_u + b_ergun_arr[j] * rho_gas * current_u**2) * ergun_ramp
+            dPdz = - (a_ergun_arr[j] * mu * current_u + b_ergun_arr[j] * rho_gas * current_u**2)
             current_P = max(current_P + dPdz * dz, P_low * 0.1)
         current_u = next_u
     return res
@@ -241,12 +242,14 @@ fig.savefig(os.path.join(cycle_folder, "ads_performance.png"))
 
 # --- 5.2 Standalone Breakthrough Curve (For SCOUT Mode) ---
 if run_type == "SCOUT":
+    C_total_exit = np.sum(C_history[:, :, -1], axis=1)
     fig_break, ax_break = plt.subplots(figsize=(9, 6), constrained_layout=True)
     for i in range(5):
-        ax_break.plot(t, np.maximum(C_history[:, i, -1]/C_in[i], 0.0), label=labels[i], color=colors[i], linewidth=2.5)
+        y_i_exit = C_history[:, i, -1] / np.maximum(C_total_exit, 1e-12)
+        ax_break.plot(t, np.maximum(y_i_exit / y_feed[i], 0.0), label=labels[i], color=colors[i], linewidth=2.5)
     ax_break.set_title('Gas Breakthrough Curve (z = L)')
     ax_break.set_xlabel('Time (s)')
-    ax_break.set_ylabel('C/C0')
+    ax_break.set_ylabel('y / y_feed')
     ax_break.set_xlim(0, t_end)
     ax_break.legend()
     ax_break.grid(True)
@@ -260,11 +263,13 @@ if run_type != "SCOUT":
     
     # Breakthrough Curve
     ax_break = axes_flat[0]
+    C_total_exit = np.sum(C_history[:, :, -1], axis=1)
     for i in range(5):
-        ax_break.plot(t, np.maximum(C_history[:, i, -1]/C_in[i], 0.0), label=labels[i], color=colors[i], linewidth=2.5)
+        y_i_exit = C_history[:, i, -1] / np.maximum(C_total_exit, 1e-12)
+        ax_break.plot(t, np.maximum(y_i_exit / y_feed[i], 0.0), label=labels[i], color=colors[i], linewidth=2.5)
     ax_break.set_title('A. Gas Breakthrough Curve (z = L)')
     ax_break.set_xlabel('Time (s)')
-    ax_break.set_ylabel('C/C0')
+    ax_break.set_ylabel('y / y_feed')
     ax_break.set_xlim(0, t_end) 
     ax_break.legend()
     ax_break.grid(True)
