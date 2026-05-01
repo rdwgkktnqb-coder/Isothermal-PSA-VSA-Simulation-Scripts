@@ -34,24 +34,24 @@ def wipe_states():
     print("✨ Bed is clean.")
 
 # --- 1.2 DEFINE INITIAL MASTER PARAMETERS ---
-Phigh = 1* 101325  
-Plow = 0.025 * 101325   
-feed_input= 2.671e4 #kmol/h
+Phigh = 1.5* 101325  
+Plow = 0.01 * 101325   
+feed_input= 2.196e4 #kmol/h
 feed = feed_input*1000/3600 #mol/s
-Nsets = 16
+Nsets = 15
 CSSHALF = 0.5
-Rinse = 0.23
+Rinse = 0.2
 master_params = {
     # Bed & System Parameters
     'feed_molar_flow': feed/Nsets,
-    "u_feed_rinse": 0.425,
+    "u_feed_rinse": 0.4,
     "L": 15,
+    "d":5, 
     "T": 20 + 273.15,
     "R": 8.314,
     "P_high": Phigh,
     'P_mid' : 1*101325,
     "P_low": Plow,
-    "d":5, 
     "Nsets": Nsets,
     "N": 100,
     "dp": 0.0015,
@@ -73,9 +73,10 @@ master_params = {
     "t_ads_start": 0,
     "t_ads_end": 2500, 
     "t_op_ads": 400,
-    "t_ads_safety_ratio": 0.5,
+    "t_ads_safety_ratio": 0.9,
     "tau_bd": 30.0,
 }
+s
 
 config_path = os.path.join(script_dir, "master_config.json")
 with open(config_path, "w") as f:
