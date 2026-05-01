@@ -76,7 +76,7 @@ master_params = {
     "t_ads_safety_ratio": 0.9,
     "tau_bd": 30.0,
 }
-s
+
 
 config_path = os.path.join(script_dir, "master_config.json")
 with open(config_path, "w") as f:
