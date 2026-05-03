@@ -10,7 +10,6 @@ ads_script = "VPSA(ads,New).py"
 des_script = "VPSA(Depressurization).py"
 rep_script = "VPSA(Repressurization).py"
 rinse_script = "VPSA(Rinse).py"
-
 rinse_path = os.path.join(script_dir, rinse_script)
 ads_path = os.path.join(script_dir, ads_script)
 des_path = os.path.join(script_dir, des_script)
@@ -36,17 +35,17 @@ def wipe_states():
 # --- 1.2 DEFINE INITIAL MASTER PARAMETERS ---
 Phigh = 1.5* 101325  
 Plow = 0.01 * 101325   
-feed_input= 2.196e4 #kmol/h
+feed_input= 1.358e4 #kmol/h
 feed = feed_input*1000/3600 #mol/s
-Nsets = 15
+Nsets = 10
 CSSHALF = 0.5
 Rinse = 0.2
 master_params = {
     # Bed & System Parameters
     'feed_molar_flow': feed/Nsets,
-    "u_feed_rinse": 0.4,
-    "L": 15,
-    "d":5, 
+    "u_feed_rinse": 0.36,
+    "L": 16,
+    "d":5.2, 
     "T": 20 + 273.15,
     "R": 8.314,
     "P_high": Phigh,
