@@ -43,13 +43,13 @@ Rinse = 0.2
 master_params = {
     # Bed & System Parameters
     'feed_molar_flow': feed/Nsets,
-    "u_feed_rinse": 0.36,
+    "u_feed_rinse": 0.4,
     "L": 16,
     "d":5.2, 
-    "T": 20 + 273.15,
+    "T": 30 + 273.15,
     "R": 8.314,
     "P_high": Phigh,
-    'P_mid' : 1*101325,
+    'P_mid' : Phigh,   # heavy-reflux rinse runs at adsorption pressure
     "P_low": Plow,
     "Nsets": Nsets,
     "N": 100,
@@ -70,7 +70,7 @@ master_params = {
     
    # Time Parameters: Adsorption (Will be optimized by Scout)
     "t_ads_start": 0,
-    "t_ads_end": 2500, 
+    "t_ads_end": 5000, 
     "t_op_ads": 400,
     "t_ads_safety_ratio": 0.9,
     "tau_bd": 30.0,
