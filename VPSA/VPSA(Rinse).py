@@ -108,9 +108,6 @@ def calc_rhs(t, y, N, P_low, P_mid, u_feed, eps, rho_s, dz, MW, mu, y_feed, k_ld
     flux_in_2 = (current_u / eps) * (y_feed[2] * feed_ramp) * (current_P / (R * T))
     
     mass_transfer_coef = ((1 - eps) / eps) * rho_s
-    C_target = P_mid / (R * T)
-    tau_P = 0.1
-    
 
     for j in range(N):
         raw_C_0 = y[0 * N + j]
@@ -163,23 +160,13 @@ def calc_rhs(t, y, N, P_low, P_mid, u_feed, eps, rho_s, dz, MW, mu, y_feed, k_ld
         flux_out_1 = (next_u / eps) * up_C_1 
         flux_out_2 = (next_u / eps) * up_C_2 
         
-        # Pressure-relaxation: pull sum(C) back to P_mid/(R*T) without changing composition
-        p_corr = -(C_tot_raw - C_target) / tau_P
-        res[0 * N + j] = -((flux_out_0 - flux_in_0) / dz) - mass_transfer_coef * dqdt_0 + p_corr * y_frac_0
-        res[1 * N + j] = -((flux_out_1 - flux_in_1) / dz) - mass_transfer_coef * dqdt_1 + p_corr * y_frac_1
-        res[2 * N + j] = -((flux_out_2 - flux_in_2) / dz) - mass_transfer_coef * dqdt_2 + p_corr * y_frac_2
+        res[0 * N + j] = -((flux_out_0 - flux_in_0) / dz) - mass_transfer_coef * dqdt_0
+        res[1 * N + j] = -((flux_out_1 - flux_in_1) / dz) - mass_transfer_coef * dqdt_1
+        res[2 * N + j] = -((flux_out_2 - flux_in_2) / dz) - mass_transfer_coef * dqdt_2
 
         flux_in_0, flux_in_1, flux_in_2 = flux_out_0, flux_out_1, flux_out_2
-        
-        # Pressure Update
-        if j < N - 1:
-            ergun_ramp = (1.0 - np.exp(-t / 2.0))
-            rho_gas = (y_frac_0 * MW[0] + y_frac_1 * MW[1] + y_frac_2 * MW[2]) * (current_P / (R * T))
-            dPdz = - (a_ergun_arr[j] * mu * current_u + b_ergun_arr[j] * rho_gas * current_u * abs(current_u)) * ergun_ramp
-            next_P = current_P + dPdz * dz
-            if next_P < P_low * 0.1: next_P = P_low * 0.1
-            current_P = next_P
-            
+
+        # Pressure assumed uniform at P_mid; no Ergun update.
         current_u = next_u
     return res
 
