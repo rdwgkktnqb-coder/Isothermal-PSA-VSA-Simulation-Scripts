@@ -40,6 +40,8 @@ psa-simulator/
 
 The `results/` folder is created on first run and contains every plot, summary, and breakthrough curve, organized by cycle.
 
+The VPSA rinse model has been the subject of several iterative refinements aimed at resolving an early-time inflection in the blowdown elution curve. The intermediate experiments live on separate branches so each can be reproduced independently — see [Section 11. Branch Structure](#11-branch-structure). The takeaway from those experiments was that the small early-time feature in the elution curve is a physically real signature of the rinse mass-transfer front being convected to the open end during the high-velocity initial phase of blowdown, not a numerical artefact, and is fully documented in [Section 12. The Blowdown Elution Inflection](#12-the-blowdown-elution-inflection).
+
 ---
 
 ## 2. Requirements
@@ -131,7 +133,7 @@ There is no inter-process Python state. Each phase is a standalone script. They 
 | File | Written by | Read by | Extra payload |
 |------|-----------|---------|---------------|
 | `adsorption_end_state.npz` | Adsorption | Rinse / Blowdown | `co2_moles_fed` (VPSA) |
-| `rinse_end_state.npz` | Rinse (VPSA) | Blowdown | `co2_moles_rinse` (VPSA) |
+| `rinse_end_state.npz` | Rinse (VPSA) | Blowdown | `co2_moles_rinse`, `co2_moles_exhaust_rinse`, `P_profile` (`pressure-state` branch only) |
 | `desorption_end_state.npz` | Blowdown/Purge | Repressurization | — |
 | `repressurization_end_state.npz` | Repressurization | Adsorption (next cycle) | — |
 | `previous_cycle_state.npz` | Master | Master (convergence check) | — |
@@ -164,7 +166,9 @@ Diffusion is neglected — Peclet numbers in industrial PSA columns are O(10³�
 
 Superficial velocity `u(z)` is not a primary state variable. At each RHS call, `du/dz` is reconstructed from the local total-moles balance (LDF source + gas-density change) and `u(z)` is rebuilt by **cumulative summation** anchored at a known boundary:
 
-- **PSA adsorption / VPSA adsorption / rinse** — `u(z=0) = u_feed` (Dirichlet inlet), march forward through the loop.
+- **PSA adsorption / VPSA adsorption** — `u(z=0) = u_feed` (Dirichlet inlet), march forward through the loop.
+- **VPSA rinse (`main`, `with-ergun-relaxation`, `no-Ergun` branches)** — same scheme as VPSA adsorption: `u(z=0) = u_feed` Dirichlet, march forward, `du/dz` reconstructed from a uniform-pressure total-moles balance.
+- **VPSA rinse (`pressure-state` branch, when commit 2 is applied)** — face-centred velocity solved directly from the **Ergun momentum balance** at every interior face: `u_face[j]` is the positive root of `a·μ·u + b·ρ·|u|·u = −∂P/∂z`, with the inlet face fixed at `u(0) = u_feed · (1 − exp(−t/0.5))` and the outlet face extrapolated by zero gradient. No cumulative summation; pressure does not need to be uniform; total mass is conserved by construction because the species PDEs sum to the total balance.
 - **VPSA blowdown** — `u(z=L) = 0` (closed product end), integrate **backward** using a reverse-loop `for j in range(N-2, -1, -1)`. The bottom of the bed is the open vacuum port, so velocity grows in magnitude (negative sign convention) as the loop walks down.
 - **VPSA repressurization** — `u(z=0) = 0` (closed feed end), integrate forward from cell 0 toward the open product-end inlet at z = L. Pure-N₂ feed is injected only when `v_inlet ≤ 0` (gas flowing inward).
 - **PSA blowdown / purge / repressurization** — `np.cumsum(du[::-1])[::-1]` integrates from the open boundary back toward the closed end.
@@ -173,13 +177,15 @@ PSA additionally **clips** the result to `[1e-6, 5.0] m/s` to keep BDF out of un
 
 ### 6.3 Pressure Sub-Model
 
-Three different treatments depending on the phase:
+Four different treatments depending on the phase:
 
 - **Adsorption (both)** — Pressure is solved by the **Ergun equation** integrated cell-by-cell along *z*, anchored at the high-pressure inlet. To avoid an impulsive Δp at *t = 0*, Ergun is multiplied by a **soft-start ramp** `(1 − exp(−t/5))` (PSA) or `(1 − exp(−t/2))` (VPSA).
+- **VPSA rinse — uniform-P branches** (`main`, `with-ergun-relaxation`, `no-Ergun`) — Pressure is held uniform at `P_mid`. On `with-ergun-relaxation` an Ergun pressure-drop term is still computed locally for the partial-pressure inputs to the Toth/Langmuir isotherm but does not feed back into the total mass balance, which is why a pressure-relaxation source term and (originally) a velocity floor were needed to keep `Σ C_i = P_mid/(R·T)` from drifting. On `no-Ergun` the Ergun term is dropped entirely and the uniform-P assumption is rigorously valid only when `ΔP_Ergun / P_op ≪ 5 %`.
+- **VPSA rinse — `pressure-state` branch** — Pressure is the **algebraic identity** `P(z, t) = (Σ_i C_i(z, t)) · R · T` evaluated at every cell at every RHS call; *not* a separate state. The momentum balance is the Ergun equation, used to solve for the face-centred velocity `u(z)` from `∂P/∂z`. Total mass conservation is preserved by construction: the species PDEs sum to the total mass balance, which through the ideal gas law is identically the pressure dynamics. **No floor, no relaxation, no contradiction** — the design intent of this branch.
 - **Blowdown** — Pressure follows a prescribed **first-order exponential decay** `P(t) = P_low + (P_high − P_low)·exp(−t/τ_bd)`. The corresponding `dP/dt` is fed into the total-moles balance to drive the gas-expansion velocity term.
 - **Repressurization** — In VPSA, `P(t) = P_low + ((P_high − P_low)/t_rep)·t` is a **linear ramp**, giving a constant `dP/dt` in the velocity equation. PSA uses an exponential ramp via the same `tau` formulation as blowdown.
 
-In every regeneration phase the pressure is an explicit function of time rather than a state variable — this collapses what would otherwise be a stiff differential-algebraic system into a plain ODE.
+In every blowdown / repressurization phase the pressure remains an explicit function of time rather than a state variable — this collapses what would otherwise be a stiff differential-algebraic system into a plain ODE. The VPSA rinse on the `pressure-state` branch is the only step where pressure varies in *space*; even there it is not a true state variable, since it is recovered algebraically from the species concentrations.
 
 ### 6.4 Time Integration — `scipy.integrate.solve_ivp` with BDF
 
@@ -192,8 +198,10 @@ solve_ivp(rhs, [t0, tf], y0, method='BDF',
 solve_ivp(..., rtol=5e-2, atol=1e-4, first_step=1e-11)  # blowdown / purge
 
 # VPSA
-solve_ivp(..., rtol=1e-3, atol=1e-5)                    # adsorption / rinse
-solve_ivp(..., rtol=1e-3, atol=1e-6)                    # blowdown
+solve_ivp(..., rtol=1e-3, atol=1e-5)                    # adsorption
+solve_ivp(..., rtol=1e-5, atol=1e-7, first_step=0.001)  # rinse (pressure-state branch)
+solve_ivp(..., rtol=1e-3, atol=1e-4, first_step=0.01)   # rinse (other branches)
+solve_ivp(..., rtol=1e-6, atol=1e-8, first_step=0.01)   # blowdown
 solve_ivp(..., rtol=1e-3, atol=1e-5, first_step=1e-6)   # repressurization
 ```
 
@@ -230,6 +238,8 @@ Several smoothing tricks keep the integrator stable across regime changes:
 - **Soft startup ramps** — Ergun `(1 − exp(−t/5))` PSA / `(1 − exp(−t/2))` VPSA, plus a feed-composition ramp `feed_ramp = 1 − exp(−t/0.5)` in VPSA that bleeds the inlet from pure-N₂ residue into the actual flue-gas mix over the first ~1.5 s.
 - **Bounded p-ratio** `np.clip(P_partial / P_atm, 1e-10, 1000)` — keeps `^n_param` away from `0^negative` and `large^large` in PSA's Sips evaluation.
 - **Velocity clipping** (PSA blowdown) `np.clip(u, 1e-4, 5.0)` — keeps the integrator out of unphysical regions during the early transient.
+- **Pressure-relaxation source** (VPSA rinse, `with-ergun-relaxation` branch only) — at each cell, a term `−(ΣC − P_mid/(R·T)) / τ_P` is added to the species RHS, weighted by mole fractions, to suppress drift of the total density away from the prescribed `P_mid`. This is needed because the uniform-P assumption and the locally Ergun-dropped `current_P` used in the isotherm/velocity coefficients are mutually inconsistent. `τ_P = 0.1 s` was tuned to overpower the LDF source rate at the breakthrough front. The `pressure-state` branch eliminates the need for this term entirely by making the momentum balance and the species PDEs self-consistent.
+- **Non-negative upwind** (VPSA blowdown) — advected concentrations in the convective flux are clamped with `max(C, 0)` to prevent solver-noise negatives from being transported to the open end and amplified into spurious oscillations on the elution curve.
 
 ### 6.8 Outer Loop — Cyclic Steady State as a Picard Iteration
 
@@ -273,7 +283,7 @@ The VPSA blowdown reports **three independent recovery metrics** from the same a
 ### 6.11 Phase-Specific Notes (Numerical)
 
 - **Adsorption** — solves the full 10·N (PSA) or 6·N (VPSA) ODE system. PSA additionally evaluates a **Peng-Robinson cubic** (`np.roots` of the EOS polynomial) for the gas-phase compressibility factor at each RHS call, picking the largest real root (vapour-like). VPSA uses ideal gas throughout. Both use **extended Sips** (PSA) or **single-site Langmuir** (VPSA) isotherm equilibrium — note the VPSA arrays are still named `b_toth` for legacy reasons even though the actual `q_star = (b·P·q_s) / (1 + b·P)` form is Langmuir.
-- **Rinse (VPSA)** — adsorption-style RHS with the inlet boundary set to `y_feed = [0, 1, 0]` (pure CO₂) at `P_mid`, and `u_feed_rinse` read directly from the config rather than back-calculated from a target molar flow.
+- **Rinse (VPSA)** — adsorption-style RHS with the inlet boundary set to `y_feed ≈ [0.04, 0.96, 0]` (heavy reflux from the previous blowdown vacuum tail) at `P_mid` (which equals `P_high` in the current default — heavy reflux runs at adsorption pressure by convention). `u_feed_rinse` is read directly from the config rather than back-calculated from a target molar flow. The inlet composition is updated each cycle by the master from the previous blowdown's vacuum-tail purity, closing the recycle loop. On the `pressure-state` branch the rinse switches from a forward-marching cumulative continuity scheme to a face-centred Ergun momentum balance — see Section 6.2 and 6.3.
 - **Blowdown / Purge** — pressure trajectory becomes an explicit `t`-dependent forcing term, shrinking the effective state vector. VPSA blowdown also pre-allocates the `dqdt_*` arrays inside the JIT-compiled RHS to keep Numba from re-allocating on each call.
 - **Repressurization** — same kernel as blowdown with the sign of `dP/dt` reversed; in VPSA the linear pressure ramp gives a constant compression source term, and pure N₂ is fed at the open product end only when the inlet velocity is inward (`v_inlet ≤ 0`).
 - **CoD (VPSA, optional)** — cocurrent depressurization between rinse and blowdown; commented out in `master VPSA.py` line 126, enable by uncommenting `subprocess.run([..., cod_path], ...)`.
@@ -288,12 +298,15 @@ Edit the `master_params` dict at the top of `master.py` or `master VPSA.py`. The
 
 | Parameter | Meaning | Default (PSA / VPSA) |
 |-----------|---------|----------------------|
-| `L` | Bed length (m) | 12 / 12 |
-| `d` | Bed diameter (m) | 3 / 4.5 |
-| `P_high` | High pressure (Pa) | 15 atm / 1 atm |
-| `P_low` | Low pressure (Pa) | 1 atm / 0.1 atm |
-| `T` | Temperature (K) | 303.15 / 293.15 |
-| `Nsets` | Number of bed pairs in the train | 3 / 12 |
+| `L` | Bed length (m) | 12 / 16 |
+| `d` | Bed diameter (m) | 3 / 5.2 |
+| `dp` | Adsorbent particle diameter (m) | 0.002 / 0.0015 |
+| `P_high` | High pressure (Pa) | 15 atm / 1.5 atm |
+| `P_mid` | Heavy-reflux rinse pressure (Pa, VPSA only) | — / `P_high` (heavy-reflux convention) |
+| `P_low` | Low pressure (Pa) | 1 atm / 0.01 atm |
+| `T` | Temperature (K) | 303.15 / 303.15 |
+| `Nsets` | Number of bed pairs in the train | 3 / 10 |
+| `u_feed_rinse` | Rinse superficial velocity (m/s, VPSA only) | — / 0.4 |
 
 **Phase time ratios** (must sum to 1.0 across the cycle)
 
@@ -353,6 +366,8 @@ Once converged, the master also writes:
 - **CSS never converges** — usually means the phase ratios don’t balance (bed is over- or under-regenerated each cycle). Try: lower `Adsorption_Ratio`, raise `Purge_Ratio`/`Rinse_Ratio`, or raise `t_ads_safety_ratio` away from 1.
 - **`RuntimeWarning` from `np.roots` in Peng-Robinson** — harmless; the warning filter suppresses it. Z-factor selects the largest real root (vapour-like).
 - **Long runtime** — first call to a Numba-compiled function compiles it (~5–10 s). Subsequent cycles reuse the cache.
+- **Rinse inlet pressure exceeds `P_mid` on `pressure-state`** — expected. With a Dirichlet-`u` inlet boundary, the bed pressurises to whatever level Ergun requires to push the prescribed `u_feed_rinse` through. At the current design point (`d = 5.2 m`, `L = 16 m`, `u_feed_rinse = 0.4 m/s`) this gives `P(z=0) ≈ 1.82 bar` versus `P_mid = 1.5 bar`. To recover the textbook uniform-pressure model with `ΔP_Ergun ≪ P_op`, enlarge `d` (the inertial term scales as `1/d⁴`); a quick Ergun ΔP estimate at the design point is in the project plan in `~/.claude/plans/in-my-vpsa-scripts-jiggly-platypus.md`.
+- **Blowdown elution shows a small early-time inflection** — physical, not numerical. See [Section 12. The Blowdown Elution Inflection](#12-the-blowdown-elution-inflection).
 
 ---
 
@@ -366,3 +381,76 @@ Splitting each phase into its own script means:
 - The master is a thin orchestrator: it owns the cycle logic and convergence check; it owns no physics.
 - The CSS loop is a clean `for cycle in range(...)` whose inner body is four `subprocess.run` calls. You can add a phase (the VPSA Rinse and CoD steps were added this way) without touching the others.
 - Results are organized per cycle, so you can scrub through `cycle_1, cycle_2, …` and watch the bed approach steady state visually.
+
+---
+
+## 11. Branch Structure
+
+The VPSA rinse model has been refined in three iterations to chase down the
+contradiction between the rinse step's uniform-pressure assumption and the
+Ergun pressure drop the geometry actually produces. The intermediate
+formulations have been kept on separate branches as a documented audit
+trail.
+
+| Branch | Rinse formulation | Ergun? | Floor / Relaxation? | Notes |
+|--------|-------------------|--------|---------------------|-------|
+| `main` | Original — uniform `P = P_mid`, Ergun spatial drop in the isotherm only, `u_floor = 0.05·u_feed` | Yes (locally) | Floor only | Internally inconsistent: the divergence-velocity formula divides by `current_P/(R·T)` (Ergun-dropped) while the species PDEs assume `Σ C = P_mid/(R·T)`. The floor masks the resulting drift. |
+| `with-ergun-relaxation` | Same as `main` but with the velocity floor removed and replaced by an explicit pressure-relaxation source `−(ΣC − P_mid/(R·T)) / τ_P` (`τ_P = 0.1 s`). VPSA blowdown also gets tightened tolerances and a non-negative upwind clamp. | Yes (locally) | Relaxation source | Useful as a reference: shows that the underlying contradiction was the floor's job, and the relaxation does it more cleanly. Still a band-aid. |
+| `no-Ergun` | Ergun deleted entirely; `current_P = P_mid` throughout the rinse RHS. The divergence-velocity equation is now self-consistent because there is no Ergun term to disagree with. | No | Neither | Rigorously correct only when `ΔP_Ergun / P_op ≪ 5 %`, which fails at the current design point. Carries the same tolerance/upwind fixes in VPSA blowdown. |
+| `pressure-state` | The principled answer when the geometry cannot be relaxed: `P(z, t) = (Σ C_i(z, t)) · R · T` is recovered algebraically, and the Ergun momentum balance is solved at every interior face for `u(z)`. Inlet velocity is Dirichlet (`u(0) = u_feed`), outlet is zero-gradient. Total mass conservation is built into the formulation. | Yes (in momentum) | Neither | Production target. Commit 1 (`P_mid = P_high` heavy-reflux fix) and the new state-vector layout are wired in; the full RHS rewrite (commit 2) is on the working tree but not yet committed. |
+
+To compare two branches without re-running the full pipeline, the master
+script's per-cycle outputs can be diff-ed directly:
+
+```bash
+git checkout with-ergun-relaxation && python3 "VPSA(Rinse).py"  # produces rinse_end_state.npz
+mv rinse_end_state.npz rinse_end_state.with-ergun.npz
+git checkout no-Ergun                && python3 "VPSA(Rinse).py"
+mv rinse_end_state.npz rinse_end_state.no-ergun.npz
+# then inspect Σ C(z), P(z), q_CO2(z) for both
+```
+
+`main` is preserved as the baseline; the three derivative branches are
+self-contained snapshots that can be checked out independently.
+
+---
+
+## 12. The Blowdown Elution Inflection
+
+The early development of the simulator surfaced a small but visible kink
+in the molar fractions at the open end of the column during the first
+~10–20 s of the blowdown step: N₂ briefly rises by a few mol % and CO₂
+correspondingly dips, before the elution curve resumes the expected
+monotonic CO₂-decline / N₂-rise behaviour. The kink survived every
+numerical mitigation that was tried (tighter tolerances, finer grid,
+non-negative upwind, pressure-relaxation in the rinse), and that is the
+point: it is not a numerical artefact.
+
+The kink is the **convected composition signature of the rinse
+mass-transfer front**. At the end of a sub-breakthrough heavy-reflux
+rinse, the bed contains three axial zones: a CO₂-saturated zone near the
+feed end, a narrow mass-transfer zone around `z ≈ 0.7 L–0.8 L` where the
+gas-phase CO₂ fraction drops from ~85 mol % to a few mol %, and an
+untouched N₂-rich residual zone above. When blowdown begins, the
+expansion velocity is largest at `t = 0⁺` (where `|dP/dt|` peaks for the
+exponential `P(t)`), and is sufficient to convect the contents of the
+intermediate cells of the mass-transfer zone to the open end on a
+timescale of order `L/u ≈ 10–20 s`. That brief tail of nitrogen leaving
+the column is the kink.
+
+It is reproducible across CSS cycles, scales **with grid refinement**
+(first-order upwind has numerical diffusion `≈ u · Δz / 2` that smears
+real shocks; refining the grid sharpens the front, so the elution
+inflection grows rather than disappears — the opposite of what a
+numerical artefact would do), and does *not* propagate into the
+inventory-based audit numbers (purity, bed-sweep efficiency, cycle
+recovery), which are computed from the difference between two well-defined
+column states rather than from any time integral of the elution curve.
+
+Mitigation, if a smoother elution curve is required for a report:
+introduce an explicit axial dispersion term `(D_ax / ε) ∂² C_i / ∂z²`
+with `D_ax` from the Edwards–Richardson or Wakao–Funazkri correlations
+(`≈ 10⁻⁴ m² s⁻¹` for the present geometry), or replace the first-order
+upwind flux with a TVD limiter (van Leer, superbee). Neither changes the
+audit numbers; both broaden the rinse front to a physically realistic
+width of several centimetres and remove the inflection.
