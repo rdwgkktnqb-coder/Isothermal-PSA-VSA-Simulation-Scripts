@@ -94,92 +94,152 @@ a_ergun_arr = (150 * (1 - eps)**2) / (4 * (dp/2)**2 * eps**3) * np.ones(N)
 b_ergun_arr = (1.75 * (1 - eps)) / (2 * (dp/2) * eps**3) * np.ones(N)
 
 # =============================================================================
-# 3. PDE SOLVER (With Stability Fixes)
+# 3. PDE SOLVER — Ergun momentum + ideal-gas EOS, P derived from state
 # =============================================================================
+# State per cell: (C_0, C_1, C_2, q_0, q_1, q_2)  →  6·N total.
+# Pressure is NOT a separate state; it is the algebraic identity
+# P(z) = (C_0 + C_1 + C_2)·R·T at every quadrature point.
+# Velocity at interior cell faces is determined by the Ergun momentum
+# balance, a·μ·u + b·ρ·|u|·u = −∂P/∂z, with the inlet face fixed at the
+# prescribed superficial velocity u = u_feed (ramped) and the outlet face
+# extrapolated by zero-gradient. This formulation needs neither a velocity
+# floor nor a pressure-relaxation source term — total mass conservation
+# follows automatically from the species PDEs.
 @njit(cache=True)
 def calc_rhs(t, y, N, P_low, P_mid, u_feed, eps, rho_s, dz, MW, mu, y_feed, k_ldf, q_s, b_toth, R, T, a_ergun_arr, b_ergun_arr):
-    res = np.empty(6 * N) 
-    current_P = P_mid
-    current_u = u_feed
-    
-    feed_ramp = 1.0 - np.exp(-t / 0.5)
-    flux_in_0 = (current_u / eps) * (y_feed[0] * feed_ramp) * (current_P / (R * T))
-    flux_in_1 = (current_u / eps) * (y_feed[1] * feed_ramp + (1 - feed_ramp)*0.0036) * (current_P / (R * T))
-    flux_in_2 = (current_u / eps) * (y_feed[2] * feed_ramp) * (current_P / (R * T))
-    
+    res = np.empty(6 * N)
     mass_transfer_coef = ((1 - eps) / eps) * rho_s
-    
+
+    feed_ramp = 1.0 - np.exp(-t / 0.5)
+    u_inlet = u_feed * feed_ramp
+
+    # ---------- Pass 1: cell-centred quantities (P, ρ, q*, dq/dt) ----------
+    P_cell   = np.empty(N)
+    rho_cell = np.empty(N)
+    yf0_arr  = np.empty(N)
+    yf1_arr  = np.empty(N)
+    yf2_arr  = np.empty(N)
+    dq0_arr  = np.empty(N)
+    dq1_arr  = np.empty(N)
+    dq2_arr  = np.empty(N)
+
     for j in range(N):
         raw_C_0 = y[0 * N + j]
         raw_C_1 = y[1 * N + j]
         raw_C_2 = y[2 * N + j]
-        
-        # Mole fraction normalization for stable pressure
-        C_tot_raw = max(raw_C_0 + raw_C_1 + raw_C_2, 1e-10)
-        y_frac_0 = max(raw_C_0, 0.0) / C_tot_raw
-        y_frac_1 = max(raw_C_1, 0.0) / C_tot_raw
-        y_frac_2 = max(raw_C_2, 0.0) / C_tot_raw
-        
-        P_0_kPa = (y_frac_0 * current_P) 
-        P_1_kPa = (y_frac_1 * current_P) 
-        P_2_kPa = (y_frac_2 * current_P) 
-        
-        # Langmuir Isotherm 
-        denom_0 = 1.0 + (b_toth[0, j] * P_0_kPa)
-        denom_1 = 1.0 + (b_toth[1, j] * P_1_kPa)
-        denom_2 = 1.0 + (b_toth[2, j] * P_2_kPa)
-        
-        q_star_0 = (b_toth[0, j] * P_0_kPa * q_s[0, j]) / denom_0
-        q_star_1 = (b_toth[1, j] * P_1_kPa * q_s[1, j]) / denom_1
-        q_star_2 = (b_toth[2, j] * P_2_kPa * q_s[2, j]) / denom_2
-        
-        dqdt_0 = k_ldf[0, j] * (q_star_0 - y[3 * N + j])
-        dqdt_1 = k_ldf[1, j] * (q_star_1 - y[4 * N + j])
-        dqdt_2 = k_ldf[2, j] * (q_star_2 - y[5 * N + j])
-        
-        res[3 * N + j] = dqdt_0
-        res[4 * N + j] = dqdt_1
-        res[5 * N + j] = dqdt_2
-        
-        sum_dqdt = dqdt_0 + dqdt_1 + dqdt_2
-        
-        # Velocity Update
-        du = -dz * ((1 - eps) * rho_s * sum_dqdt / (current_P / (R * T)))
-        next_u = current_u + du
-        # Floor the velocity to prevent numerical collapse at the adsorption front.
-        u_floor = 0.05 * u_feed
-        if next_u < u_floor:
-            next_u = u_floor
-        
-        # Dynamic Upwinding
-        if next_u >= 0.0:
-            up_C_0, up_C_1, up_C_2 = raw_C_0, raw_C_1, raw_C_2
+
+        C_tot = raw_C_0 + raw_C_1 + raw_C_2
+        if C_tot < 1e-10:
+            C_tot = 1e-10
+
+        yf0 = max(raw_C_0, 0.0) / C_tot
+        yf1 = max(raw_C_1, 0.0) / C_tot
+        yf2 = max(raw_C_2, 0.0) / C_tot
+        yf0_arr[j] = yf0
+        yf1_arr[j] = yf1
+        yf2_arr[j] = yf2
+
+        P_local = C_tot * R * T
+        P_cell[j] = P_local
+        rho_cell[j] = (yf0 * MW[0] + yf1 * MW[1] + yf2 * MW[2]) * (P_local / (R * T))
+
+        # Toth/Langmuir isotherm using LOCAL pressure (not Ergun-dropped surrogate)
+        P_0 = yf0 * P_local
+        P_1 = yf1 * P_local
+        P_2 = yf2 * P_local
+
+        denom_0 = 1.0 + b_toth[0, j] * P_0
+        denom_1 = 1.0 + b_toth[1, j] * P_1
+        denom_2 = 1.0 + b_toth[2, j] * P_2
+
+        q_star_0 = (b_toth[0, j] * P_0 * q_s[0, j]) / denom_0
+        q_star_1 = (b_toth[1, j] * P_1 * q_s[1, j]) / denom_1
+        q_star_2 = (b_toth[2, j] * P_2 * q_s[2, j]) / denom_2
+
+        dq0 = k_ldf[0, j] * (q_star_0 - y[3 * N + j])
+        dq1 = k_ldf[1, j] * (q_star_1 - y[4 * N + j])
+        dq2 = k_ldf[2, j] * (q_star_2 - y[5 * N + j])
+
+        dq0_arr[j] = dq0
+        dq1_arr[j] = dq1
+        dq2_arr[j] = dq2
+
+        res[3 * N + j] = dq0
+        res[4 * N + j] = dq1
+        res[5 * N + j] = dq2
+
+    # ---------- Pass 2: face velocities from Ergun momentum balance ----------
+    # Faces indexed 0..N: 0=inlet (z=0), N=outlet (z=L).
+    u_face = np.empty(N + 1)
+
+    # Inlet face: prescribed superficial velocity (ramped)
+    u_face[0] = u_inlet
+
+    # Interior faces j = 1..N-1: solve  a·μ·u + b·ρ·|u|·u = −∂P/∂z
+    for j in range(1, N):
+        dPdz_face = (P_cell[j] - P_cell[j - 1]) / dz
+        rho_face  = 0.5 * (rho_cell[j - 1] + rho_cell[j])
+        a_face    = 0.5 * (a_ergun_arr[j - 1] + a_ergun_arr[j])
+        b_face    = 0.5 * (b_ergun_arr[j - 1] + b_ergun_arr[j])
+
+        rhs    = -dPdz_face          # forward flow ↔ rhs > 0
+        A_lin  = a_face * mu
+        A_quad = b_face * rho_face
+
+        if A_quad > 1e-20:
+            disc  = A_lin * A_lin + 4.0 * A_quad * abs(rhs)
+            u_mag = (-A_lin + np.sqrt(disc)) / (2.0 * A_quad)
+        else:
+            u_mag = abs(rhs) / max(A_lin, 1e-20)
+
+        if rhs >= 0.0:
+            u_face[j] = u_mag
+        else:
+            u_face[j] = -u_mag
+
+    # Outlet face: zero-gradient extrapolation (free outflow)
+    u_face[N] = u_face[N - 1]
+
+    # ---------- Pass 3: species fluxes and PDE residual ----------
+    # Inlet ghost-cell composition: feed at the rinse delivery pressure (P_mid).
+    inlet_C0 = (y_feed[0] * feed_ramp) * (P_mid / (R * T))
+    inlet_C1 = (y_feed[1] * feed_ramp + (1.0 - feed_ramp) * 0.0036) * (P_mid / (R * T))
+    inlet_C2 = (y_feed[2] * feed_ramp) * (P_mid / (R * T))
+
+    # Inlet face flux (face 0). Forward flow only at the inlet during a rinse.
+    flux_in_0 = (u_face[0] / eps) * inlet_C0
+    flux_in_1 = (u_face[0] / eps) * inlet_C1
+    flux_in_2 = (u_face[0] / eps) * inlet_C2
+
+    for j in range(N):
+        u_out = u_face[j + 1]
+
+        if u_out >= 0.0:
+            up_C_0 = max(y[0 * N + j],     0.0)
+            up_C_1 = max(y[1 * N + j],     0.0)
+            up_C_2 = max(y[2 * N + j],     0.0)
         else:
             if j < N - 1:
-                up_C_0, up_C_1, up_C_2 = y[0*N+j+1], y[1*N+j+1], y[2*N+j+1]
+                up_C_0 = max(y[0 * N + j + 1], 0.0)
+                up_C_1 = max(y[1 * N + j + 1], 0.0)
+                up_C_2 = max(y[2 * N + j + 1], 0.0)
             else:
-                up_C_0, up_C_1, up_C_2 = raw_C_0, raw_C_1, raw_C_2
-                
-        flux_out_0 = (next_u / eps) * up_C_0 
-        flux_out_1 = (next_u / eps) * up_C_1 
-        flux_out_2 = (next_u / eps) * up_C_2 
-        
-        res[0 * N + j] = -((flux_out_0 - flux_in_0) / dz) - mass_transfer_coef * dqdt_0
-        res[1 * N + j] = -((flux_out_1 - flux_in_1) / dz) - mass_transfer_coef * dqdt_1
-        res[2 * N + j] = -((flux_out_2 - flux_in_2) / dz) - mass_transfer_coef * dqdt_2
-        
-        flux_in_0, flux_in_1, flux_in_2 = flux_out_0, flux_out_1, flux_out_2
-        
-        # Pressure Update
-        if j < N - 1:
-            ergun_ramp = (1.0 - np.exp(-t / 2.0))
-            rho_gas = (y_frac_0 * MW[0] + y_frac_1 * MW[1] + y_frac_2 * MW[2]) * (current_P / (R * T))
-            dPdz = - (a_ergun_arr[j] * mu * current_u + b_ergun_arr[j] * rho_gas * current_u * abs(current_u)) * ergun_ramp
-            next_P = current_P + dPdz * dz
-            if next_P < P_low * 0.1: next_P = P_low * 0.1
-            current_P = next_P
-            
-        current_u = next_u
+                up_C_0 = max(y[0 * N + j], 0.0)
+                up_C_1 = max(y[1 * N + j], 0.0)
+                up_C_2 = max(y[2 * N + j], 0.0)
+
+        flux_out_0 = (u_out / eps) * up_C_0
+        flux_out_1 = (u_out / eps) * up_C_1
+        flux_out_2 = (u_out / eps) * up_C_2
+
+        res[0 * N + j] = -((flux_out_0 - flux_in_0) / dz) - mass_transfer_coef * dq0_arr[j]
+        res[1 * N + j] = -((flux_out_1 - flux_in_1) / dz) - mass_transfer_coef * dq1_arr[j]
+        res[2 * N + j] = -((flux_out_2 - flux_in_2) / dz) - mass_transfer_coef * dq2_arr[j]
+
+        flux_in_0 = flux_out_0
+        flux_in_1 = flux_out_1
+        flux_in_2 = flux_out_2
+
     return res
 
 pbar = tqdm(total=t_end, desc="Rinsing Bed", unit="s")
@@ -192,7 +252,7 @@ def pde_layered(t, y):
 data = np.load(ads_state_file)
 y0 = np.concatenate([data['C_end'].flatten(), data['q_end'].flatten()])
 
-sol = solve_ivp(pde_layered, [0, t_end], y0, method='BDF', t_eval=t_eval, rtol=1e-3, atol=1e-4, first_step=0.01)
+sol = solve_ivp(pde_layered, [0, t_end], y0, method='BDF', t_eval=t_eval, rtol=1e-5, atol=1e-7, first_step=0.001)
 pbar.close()
 
 # =============================================================================
@@ -209,9 +269,12 @@ ads_data = np.load(ads_state_file)
 ads_end_co2_inv = float(ads_data['ads_end_inventory'][1]) if 'ads_end_inventory' in ads_data.files else 0.0
 co2_moles_exhaust_rinse = max(co2_moles_rinse - (rinse_end_co2_inv - ads_end_co2_inv), 0.0)
 
+P_profile_end = (sol.y[0:N, -1] + sol.y[N:2*N, -1] + sol.y[2*N:3*N, -1]) * R * T
+
 rinse_state_file = os.path.join(script_dir, 'rinse_end_state.npz')
 np.savez(rinse_state_file,
-         L=L, T=T, R=R, P_end=P_mid, d=d,
+         L=L, T=T, R=R, P_end=float(P_profile_end.mean()), d=d,
+         P_profile=P_profile_end,
          C_end=sol.y[:3*N, -1],
          q_end=sol.y[3*N:, -1],
          co2_moles_rinse=co2_moles_rinse,
