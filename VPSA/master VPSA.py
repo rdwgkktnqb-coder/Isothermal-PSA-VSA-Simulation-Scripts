@@ -34,7 +34,7 @@ def wipe_states():
 
 # --- 1.2 DEFINE INITIAL MASTER PARAMETERS ---
 Phigh = 1.5* 101325  
-Plow = 0.01 * 101325   
+Plow = 0.03 * 101325   
 feed_input= 1.358e4 #kmol/h
 feed = feed_input*1000/3600 #mol/s
 Nsets = 10
@@ -43,13 +43,13 @@ Rinse = 0.2
 master_params = {
     # Bed & System Parameters
     'feed_molar_flow': feed/Nsets,
-    "u_feed_rinse": 0.4,
+    "u_feed_rinse": 0.38,
     "L": 16,
     "d":5.2, 
     "T": 30 + 273.15,
     "R": 8.314,
     "P_high": Phigh,
-    'P_mid' : Phigh,   # heavy-reflux rinse runs at adsorption pressure
+    'P_mid' : Phigh,   
     "P_low": Plow,
     "Nsets": Nsets,
     "N": 100,
