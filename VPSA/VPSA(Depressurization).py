@@ -305,11 +305,6 @@ with open(summary_path, 'w', encoding='utf-8') as f:
     f.write(f"NET CO2 PRODUCED(kg):     {net_co2_produced*MW[1]:>10.2e} kg\n")
     f.write("="*55 + "\n\n")
 
-print(f"\n--- PERFORMANCE AUDIT RESULTS ---")
-print(f"Purity:           {co2_purity:.2f}%")
-print(f"Bed Sweep Eff.:   {bed_sweep_efficiency:.2f}% (CO2 vacuumed / CO2 in bed at start of BD)")
-print(f"Cycle Recovery:   {cycle_recovery:.2f}% (Net fresh CO2 captured / fresh CO2 fed)")
-
 
 # =============================================================================
 # 6. VISUALIZATION & STATE SAVING

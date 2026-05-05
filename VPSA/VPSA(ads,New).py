@@ -340,10 +340,6 @@ moles_exhaust_gross = np.maximum(moles_in_total - (final_inventory - initial_inv
 total_gross_exhaust = np.sum(moles_exhaust_gross)
 exhaust_mix_pct = (moles_exhaust_gross / total_gross_exhaust) * 100 if total_gross_exhaust > 0 else np.zeros(3)
 
-print(f"\n--- EXHAUST (RAFFINATE) CONSISTENCY RESULTS ---")
-for i in range(3):
-    print(f"{labels[i]:<4}: {exhaust_mix_pct[i]:>6.2f}% | Slipped Moles: {moles_exhaust_gross[i]:.3e}")
-
 if run_type == "SCOUT":
     # CO2 breakthrough: first time exit C/C0 crosses the threshold.
     co2_breakthrough_threshold = 0.01  # 1% of feed CO2 concentration

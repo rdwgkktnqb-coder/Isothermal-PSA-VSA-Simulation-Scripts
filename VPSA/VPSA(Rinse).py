@@ -43,7 +43,6 @@ d = config["d"]; Nsets = config["Nsets"]
 # THE RINSE FEED: 100% CO2
 y_co2_feed = config.get("y_co2_feed_rinse", 1)
 y_feed = np.array([1-y_co2_feed, y_co2_feed, 0.0])
-print(y_feed)
 y_feed /= np.sum(y_feed)
 N = int(config["N"])
 dp = float(config.get("dp", 0.002))
@@ -221,7 +220,6 @@ print(f"✅ Rinse State Saved. Ready for Blowdown!")
 # =============================================================================
 # 5. VISUALIZATION (Separate Gas Phase Species Distributions with Time Snapshots)
 # =============================================================================
-print("Generating separate gas phase spatial profiles for each species with time snapshots...")
 
 # 1. Reshape gas concentrations: (time_steps, species, nodes)
 C_history = sol.y[:3*N, :].T.reshape((len(sol.t), 3, N))
