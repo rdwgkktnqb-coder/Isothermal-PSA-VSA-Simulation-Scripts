@@ -145,14 +145,14 @@ feed_input= 1.456e4 #kmol/h
 feed = feed_input*1000/3600 #mol/s
 Nsets = 22
 CSSHALF = 0.5
-Rinse = 0.21
+Rinse = 0.22
 master_params = {
     # Bed & System Parametersmaster VPSA.py
     'feed_molar_flow': feed/Nsets,
-    "u_feed_rinse": 0.2865,
+    "u_feed_rinse": 0.25,
     "L": 14,
     "d":3.05, 
-    "T": 30 + 273.15,
+    "T": 35 + 273.15,
     "R": 8.314,
     "P_high": Phigh,
     'P_mid' : Phigh,   
