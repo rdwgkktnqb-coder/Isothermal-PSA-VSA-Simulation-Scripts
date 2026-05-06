@@ -2,9 +2,117 @@ import json
 import os
 import subprocess
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
 
 # 1. SETUP PATHS
 script_dir = os.path.dirname(os.path.abspath(__file__))
+
+
+# =============================================================================
+# CSS TIMING GANTT CHART
+# =============================================================================
+def plot_css_gantt(t_ads, t_rinse, t_bd, t_rep, total_cycle, save_path):
+    """
+    Render a 2-row Gantt chart for one bed pair operating in cyclic steady
+    state. Bed A starts adsorbing at t = 0; Bed B is offset by half a
+    cycle (= total_cycle / 2) and is therefore regenerating while Bed A
+    adsorbs.
+
+    If ads_time != rinse + bd + repress an 'Idle' segment is inserted to
+    keep both beds on the same cycle clock.
+    """
+    bed_cycle = t_ads + t_rinse + t_bd + t_rep
+    half = bed_cycle / 2.0
+
+    # ----- Bed A schedule (starts at t = 0) -----
+    seq_A = [
+        ('Adsorption', t_ads,   '#1f77b4'),
+        ('Rinse',      t_rinse, '#2ca02c'),
+        ('Blowdown',   t_bd,    '#d62728'),
+        ('Repress',    t_rep,   '#ff7f0e'),
+    ]
+    # ----- Bed B schedule: same sequence but starts at +half cycle -----
+    # Reorder so it begins with the phase that lands at t = 0 in the wrapped view.
+    # For Bed B at t = 0, we are 'half' seconds into Bed A's cycle.
+    # Walk Bed A's sequence and find which phase Bed B is in at t = 0.
+    cumulative = 0.0
+    seq_B_offset = 0.0
+    seq_B_start_idx = 0
+    for i, (_, dur, _) in enumerate(seq_A):
+        if cumulative + dur > half:
+            seq_B_start_idx = i
+            seq_B_offset = half - cumulative
+            break
+        cumulative += dur
+    # Bed B starts mid-phase at index seq_B_start_idx with seq_B_offset already elapsed
+    seq_B = []
+    name, dur, color = seq_A[seq_B_start_idx]
+    seq_B.append((name, dur - seq_B_offset, color))
+    for k in range(1, 4):
+        seq_B.append(seq_A[(seq_B_start_idx + k) % 4])
+    # The last phase wraps; trim it to end exactly at bed_cycle
+    consumed = sum(d for _, d, _ in seq_B[:-1])
+    name_last, _, color_last = seq_B[-1]
+    seq_B[-1] = (name_last, bed_cycle - consumed, color_last)
+
+    # ----- Plot -----
+    fig, ax = plt.subplots(figsize=(13, 4.5), tight_layout=True)
+    bed_y = {'Bed A': 11, 'Bed B': 1}
+    bar_h = 8
+
+    seen = set()
+
+    def draw_sequence(ax, seq, y, bed_label):
+        t = 0.0
+        for name, dur, color in seq:
+            label = name if name not in seen else None
+            seen.add(name)
+            ax.broken_barh([(t, dur)], (y, bar_h), facecolors=color,
+                           edgecolor='black', linewidth=0.7, label=label)
+            if dur > bed_cycle * 0.025:  # only label segments wide enough
+                txt_color = 'white' if name in ('Adsorption', 'Blowdown') else 'black'
+                ax.text(t + dur / 2, y + bar_h / 2, f'{name}\n{dur:.0f} s',
+                        ha='center', va='center',
+                        fontsize=8.5, color=txt_color, fontweight='bold')
+            t += dur
+
+    draw_sequence(ax, seq_A, bed_y['Bed A'], 'Bed A')
+    draw_sequence(ax, seq_B, bed_y['Bed B'], 'Bed B')
+
+    # Half-cycle marker
+    ax.axvline(half, linestyle='--', linewidth=1.0, color='grey', alpha=0.7)
+    ax.text(half, bed_y['Bed A'] + bar_h + 0.5,
+            f'½ cycle\nt = {half:.0f} s', ha='center', va='bottom', fontsize=8,
+            color='grey')
+
+    ax.set_yticks([bed_y['Bed B'] + bar_h / 2, bed_y['Bed A'] + bar_h / 2])
+    ax.set_yticklabels(['Bed B', 'Bed A'], fontsize=11, fontweight='bold')
+    ax.set_xlabel('Time within one full cycle (s)', fontsize=11)
+    ax.set_xlim(0, bed_cycle)
+    ax.set_ylim(-1, bed_y['Bed A'] + bar_h + 3.5)
+    ax.set_title(
+        f'VPSA Cyclic Steady-State Schedule — Bed Pair (one full cycle = {bed_cycle:.0f} s)',
+        fontsize=12, fontweight='bold')
+    ax.grid(True, axis='x', linestyle=':', alpha=0.5)
+
+    # Legend
+    legend_phases = [
+        Patch(facecolor='#1f77b4', edgecolor='black', label=f'Adsorption ({t_ads:.0f} s)'),
+        Patch(facecolor='#2ca02c', edgecolor='black', label=f'Rinse ({t_rinse:.0f} s)'),
+        Patch(facecolor='#d62728', edgecolor='black', label=f'Blowdown ({t_bd:.0f} s)'),
+        Patch(facecolor='#ff7f0e', edgecolor='black', label=f'Repress ({t_rep:.0f} s)'),
+    ]
+    ax.legend(handles=legend_phases, loc='upper center',
+              bbox_to_anchor=(0.5, -0.18), ncol=4, frameon=False, fontsize=10)
+
+    fig.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+
+
 
 ads_script = "VPSA(ads,New).py" 
 des_script = "VPSA(Depressurization).py"
@@ -33,19 +141,19 @@ def wipe_states():
     print("✨ Bed is clean.")
 
 # --- 1.2 DEFINE INITIAL MASTER PARAMETERS ---
-Phigh = 1.5* 101325  
+Phigh = 2* 101325  
 Plow = 0.03 * 101325   
 feed_input= 1.358e4 #kmol/h
 feed = feed_input*1000/3600 #mol/s
-Nsets = 10
+Nsets = 22
 CSSHALF = 0.5
-Rinse = 0.2
+Rinse = 0.21
 master_params = {
     # Bed & System Parameters
     'feed_molar_flow': feed/Nsets,
-    "u_feed_rinse": 0.38,
-    "L": 16,
-    "d":5.2, 
+    "u_feed_rinse": 0.2865,
+    "L": 14,
+    "d":3.05, 
     "T": 30 + 273.15,
     "R": 8.314,
     "P_high": Phigh,
@@ -170,6 +278,16 @@ for cycle in range(1, max_cycles + 1):
                 f.write(f"Purge:          {final_t_des:.1f} s\n")
                 f.write(f"Repress:        {final_t_rep:.1f} s\n")
                 f.write(f"Total Cycle:    {total_cycle_time:.1f} s\n")
+
+            # --- CSS schedule Gantt chart for one bed pair ---
+            gantt_path = os.path.join(script_dir, "results", "CSS_Gantt_Schedule.png")
+            plot_css_gantt(t_ads=final_t_ads,
+                           t_rinse=final_t_rinse,
+                           t_bd=final_t_bd,
+                           t_rep=final_t_rep,
+                           total_cycle=total_cycle_time,
+                           save_path=gantt_path)
+            print(f"📊 CSS Gantt chart saved to {gantt_path}")
 
             break # Exit the CSS loop
     else:
