@@ -141,7 +141,7 @@ def wipe_states():
 # --- 1.2 DEFINE INITIAL MASTER PARAMETERS ---
 Phigh = 2* 101325  
 Plow = 0.03 * 101325   
-feed_input= 1.331e4 #kmol/h
+feed_input= 1.788e4 #kmol/h
 feed = feed_input*1000/3600 #mol/s
 Nsets = 22
 CSSHALF = 0.5
@@ -151,7 +151,7 @@ master_params = {
     'feed_molar_flow': feed/Nsets,
     "u_feed_rinse": 0.27,
     "L": 14,
-    "d":3.05, 
+    "d":3.6, 
     "T": 35 + 273.15,
     "R": 8.314,
     "P_high": Phigh,
