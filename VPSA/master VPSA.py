@@ -352,9 +352,6 @@ def wipe_states():
             print(f"🗑️ Deleted: {file}")
     print("✨ Bed is clean.")
 
-
-
-
 config_path = os.path.join(script_dir, "master_config.json")
 with open(config_path, "w") as f:
     json.dump(master_params, f, indent=4)
