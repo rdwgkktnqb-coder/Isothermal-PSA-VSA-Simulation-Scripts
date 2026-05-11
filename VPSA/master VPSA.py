@@ -9,6 +9,50 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 import re
 
+# --- 1.2 DEFINE INITIAL MASTER PARAMETERS ---
+Phigh = 2* 101325  
+Plow = 0.03 * 101325   
+feed_input= 1.27e4 #kmol/h
+feed = feed_input*1000/3600 #mol/s
+Nsets = 16
+CSSHALF = 0.5
+Rinse = 0.22
+master_params = {
+    # Bed & System Parametersmaster VPSA.py
+    'feed_molar_flow': feed/Nsets,
+    "u_feed_rinse": 0.27,
+    "L": 14,
+    "d":3.6, 
+    "T": 35 + 273.15,
+    "R": 8.314,
+    "P_high": Phigh,
+    'P_mid' : Phigh,   
+    "P_low": Plow,
+    "Nsets": Nsets,
+    "N": 100,
+    "dp": 0.0015,
+    "mu": 1.135086e-05,
+    "P_atm_Pa": 101325.0,
+    
+    # SINGLE MATERIAL CONSTANTS (Replaced layers)
+    "eps": 0.3987,
+    "rho_s": 1230,
+    
+    # Ratios used for auto-scaling phase times
+    "Adsorption_Ratio": 0.5,
+    'Rinse_Ratio':Rinse,
+    "Blowdown_Ratio": CSSHALF-Rinse-0.1, 
+    'Repress_Ratio': 0.1, 
+
+    
+   # Time Parameters: Adsorption (Will be optimized by Scout)
+    "t_ads_start": 0,
+    "t_ads_end": 5000, 
+    "t_op_ads": 400,
+    "t_ads_safety_ratio": 0.9,
+    "tau_bd": 30.0,
+}
+
 
 # =============================================================================
 # DESORPTION SUMMARY PARSER (drives flow_prod / flow_rinse from the model)
@@ -33,17 +77,11 @@ def parse_desorption_summary(path):
 # =============================================================================
 def run_staggered_superposition(cycle_time, t_prod_start, t_prod_dur, flow_prod,
                                 t_rinse_start, t_rinse_dur, flow_rinse,
-                                n_pairs=22, n_cycles=2, dt=1, out_dir=None,
+                                n_pairs=Nsets, n_cycles=2, dt=1, out_dir=None,
                                 extra_gantt_events=None,
-                                buffer_P_Pa=1.5e5, buffer_T_K=308.0,
+                                buffer_P_Pa=1e5, buffer_T_K=308.0,
                                 R_const=8.314):
-    """
-    extra_gantt_events: optional list of dicts for visualization-only steps
-        [{"name": "Blowdown", "start": <s>, "dur": <s>, "color": "#hex"}, ...]
-    These appear on the Gantt rows but do NOT contribute to header flow.
-
-    buffer_P_Pa / buffer_T_K: conditions used to convert buffer holdup (mol) → m³.
-    """
+ 
     stagger_interval = cycle_time / n_pairs
     sim_duration = n_cycles * cycle_time
     t = np.arange(0, sim_duration + dt, dt)
@@ -314,49 +352,7 @@ def wipe_states():
             print(f"🗑️ Deleted: {file}")
     print("✨ Bed is clean.")
 
-# --- 1.2 DEFINE INITIAL MASTER PARAMETERS ---
-Phigh = 2* 101325  
-Plow = 0.03 * 101325   
-feed_input= 1.27e4 #kmol/h
-feed = feed_input*1000/3600 #mol/s
-Nsets = 16
-CSSHALF = 0.5
-Rinse = 0.22
-master_params = {
-    # Bed & System Parametersmaster VPSA.py
-    'feed_molar_flow': feed/Nsets,
-    "u_feed_rinse": 0.27,
-    "L": 14,
-    "d":3.6, 
-    "T": 35 + 273.15,
-    "R": 8.314,
-    "P_high": Phigh,
-    'P_mid' : Phigh,   
-    "P_low": Plow,
-    "Nsets": Nsets,
-    "N": 100,
-    "dp": 0.0015,
-    "mu": 1.135086e-05,
-    "P_atm_Pa": 101325.0,
-    
-    # SINGLE MATERIAL CONSTANTS (Replaced layers)
-    "eps": 0.3987,
-    "rho_s": 1230,
-    
-    # Ratios used for auto-scaling phase times
-    "Adsorption_Ratio": 0.5,
-    'Rinse_Ratio':Rinse,
-    "Blowdown_Ratio": CSSHALF-Rinse-0.1, 
-    'Repress_Ratio': 0.1, 
 
-    
-   # Time Parameters: Adsorption (Will be optimized by Scout)
-    "t_ads_start": 0,
-    "t_ads_end": 5000, 
-    "t_op_ads": 400,
-    "t_ads_safety_ratio": 0.9,
-    "tau_bd": 30.0,
-}
 
 
 config_path = os.path.join(script_dir, "master_config.json")
