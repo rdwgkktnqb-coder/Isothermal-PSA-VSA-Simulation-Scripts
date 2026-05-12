@@ -14,7 +14,7 @@ Phigh = 2* 101325
 Plow = 0.03 * 101325   
 feed_input= 1.27e4 #kmol/h
 feed = feed_input*1000/3600 #mol/s
-Nsets = 16
+Nsets = 15
 CSSHALF = 0.5
 Rinse = 0.22
 master_params = {
@@ -98,8 +98,8 @@ def run_staggered_superposition(cycle_time, t_prod_start, t_prod_dur, flow_prod,
         flow_net = np.where(prod_mask, flow_prod,
                             np.where(rinse_mask, flow_rinse, 0.0))
         flow_gross = np.where(prod_mask, flow_prod, 0.0)  # production only — buffer-tank sizing
-        pair_columns[f"Pair_{i+1}"] = flow_net
-        pair_gross_columns[f"Pair_{i+1}_Gross"] = flow_gross
+        pair_columns[f"Bed_{i+1}"] = flow_net
+        pair_gross_columns[f"Bed_{i+1}_Gross"] = flow_gross
 
     df = pd.DataFrame(pair_columns, index=pd.Index(t, name="Time_s"))
     df_gross = pd.DataFrame(pair_gross_columns, index=df.index)
@@ -129,10 +129,10 @@ def run_staggered_superposition(cycle_time, t_prod_start, t_prod_dur, flow_prod,
     df["Inventory_Gross_mol"] = inventory_gross
 
     print("\n" + "=" * 50)
-    print(" 22-PAIR STAGGERED SUPERPOSITION")
+    print(f" {n_pairs}-BED STAGGERED SUPERPOSITION")
     print("=" * 50)
     print(f"Stagger Interval (offset):     {stagger_interval:>8.2f} s")
-    print(f"Total Dead Time per Pair:      {dead_time:>8.2f} s")
+    print(f"Total Dead Time per Bed:       {dead_time:>8.2f} s")
     print(f"Average Gross Production Flow: {avg_gross:>8.3f} mol/s   (for buffer-tank sizing)")
     print(f"Average Net Header Flow:       {avg_net:>8.3f} mol/s   (gross − rinse)")
     print(f"Max Instantaneous Gross Flow:  {max_flow:>8.3f} mol/s")
@@ -174,9 +174,9 @@ def run_staggered_superposition(cycle_time, t_prod_start, t_prod_dur, flow_prod,
 
     ax_top.set_ylim(0.5, n_pairs + 0.5)
     ax_top.set_yticks(range(1, n_pairs + 1))
-    ax_top.set_yticklabels([f"Pair {i}" for i in range(1, n_pairs + 1)])
-    ax_top.set_ylabel("Bed Pair")
-    ax_top.set_title(f"{n_pairs}-Pair Staggered Cycle Gantt")
+    ax_top.set_yticklabels([f"Bed {i}" for i in range(1, n_pairs + 1)])
+    ax_top.set_ylabel("Bed")
+    ax_top.set_title(f"{n_pairs}-Bed Staggered Cycle Gantt")
     ax_top.grid(axis="x", alpha=0.3)
     ax_top.legend(handles=[Patch(facecolor=c, label=name)
                            for name, _, _, c in gantt_steps],
@@ -191,7 +191,7 @@ def run_staggered_superposition(cycle_time, t_prod_start, t_prod_dur, flow_prod,
                    label=f"Mean (gross) = {avg_gross:.2f} mol/s")
     ax_bot.set_xlabel("Time (s)")
     ax_bot.set_ylabel("Gross Production Flow (mol/s)")
-    ax_bot.set_title(f"Aggregate Gross Production into Buffer Tank ({n_pairs} pairs)")
+    ax_bot.set_title(f"Aggregate Gross Production into Buffer Tank ({n_pairs} beds)")
     ax_bot.grid(alpha=0.3)
     ax_bot.legend(loc="upper right")
     ax_bot.set_xlim(0, sim_duration)
@@ -478,7 +478,10 @@ for cycle in range(1, max_cycles + 1):
             else:
                 print(f"\n⚠️  {summary_path} not found — using fallback flows {flow_prod_derived}/{flow_rinse_derived} mol/s")
 
-            n_pairs_plant = int(final_config.get("Nsets", 22))
+            # Each "set" in Nsets is a bed-pair (2 beds in anti-phase).
+            # For the header-flow superposition we model every individual bed,
+            # so total beds = 2 * Nsets and stagger interval = T_cycle / (2*Nsets).
+            n_pairs_plant = 2 * int(final_config.get("Nsets", 22))
 
             run_staggered_superposition(
                 cycle_time=total_cycle_time,
